@@ -2,6 +2,20 @@
 
 const STORAGE_KEY = "nyc_supply_survey_v1";
 
+const SURVEY_MODE =
+  document.body?.dataset?.surveyMode === "conductor"
+    ? "conductor"
+    : document.body?.dataset?.surveyMode === "participant"
+      ? "participant"
+      : "standalone";
+
+let readOnly = SURVEY_MODE === "conductor";
+let participantId = null;
+let participantToken = null;
+let saveDebounceTimer = null;
+let viewingParticipantId = null;
+let viewingParticipantLabel = "";
+
 const COST_PER_MILE_GOLD = {
   huge: 1.0,
   small: 0.5,
@@ -265,78 +279,122 @@ const state = {
   ibxLine: { loaded: false }
 };
 
-function loadState() {
+function migrateLocationsFromParsed(locations) {
+  let didMigrate = false;
+  const out = (locations ?? []).map((loc) => {
+    const has2263 = typeof loc.x === "number" && typeof loc.y === "number";
+    if (has2263) return loc;
+
+    const hasLatLng = typeof loc.lat === "number" && typeof loc.lng === "number";
+    if (!hasLatLng) return loc;
+
+    const [x, y] = gpsToEPSG2263(loc.lng, loc.lat);
+    didMigrate = true;
+    return {
+      ...loc,
+      x,
+      y,
+      lat: undefined,
+      lng: undefined
+    };
+  });
+  return { locations: out, didMigrate };
+}
+
+function migrateSegments(segments) {
+  let didMigrate = false;
+  if (!Array.isArray(segments)) return { segments: [], didMigrate: false };
+  const out = segments.map((seg) => {
+    if (!seg || !Array.isArray(seg.points)) return seg;
+    if (seg.points.length === 0) return seg;
+
+    const p0 = seg.points[0];
+    if (Array.isArray(p0) && p0.length >= 2 && typeof p0[0] === "number" && typeof p0[1] === "number") {
+      return seg;
+    }
+
+    if (p0 && typeof p0.lat === "number" && typeof p0.lng === "number") {
+      didMigrate = true;
+      const points2263 = seg.points.map((p) => gpsToEPSG2263(p.lng, p.lat));
+      return { ...seg, points: points2263 };
+    }
+
+    return seg;
+  });
+  return { segments: out, didMigrate };
+}
+
+/** Applies migrated survey JSON into global `state`. */
+function applySurveyPayload(parsed, options = {}) {
+  const persist = options.persist !== false;
+  if (!parsed || !parsed.locations || !parsed.routes) return;
+
+  let didMigrate = false;
+
+  const locRes = migrateLocationsFromParsed(parsed.locations);
+  state.locations = locRes.locations;
+  didMigrate ||= locRes.didMigrate;
+
+  const cur = migrateSegments(parsed.routes?.current?.segments);
+  const ibx = migrateSegments(parsed.routes?.ibx?.segments);
+  didMigrate ||= cur.didMigrate;
+  didMigrate ||= ibx.didMigrate;
+
+  state.routes = {
+    current: {
+      segments: cur.segments,
+      totalCostGold: parsed.routes?.current?.totalCostGold ?? 0
+    },
+    ibx: {
+      segments: ibx.segments,
+      totalCostGold: parsed.routes?.ibx?.totalCostGold ?? 0
+    }
+  };
+
+  state.ibxLine = parsed.ibxLine ?? { loaded: state.ibxLine?.loaded ?? false };
+
+  if (didMigrate && persist) saveState();
+}
+
+function loadStateFromLocalStorage() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
     const parsed = JSON.parse(raw);
-    if (parsed && parsed.locations && parsed.routes) {
-      let didMigrate = false;
-
-      state.locations = (parsed.locations ?? []).map((loc) => {
-        const has2263 = typeof loc.x === "number" && typeof loc.y === "number";
-        if (has2263) return loc;
-
-        const hasLatLng = typeof loc.lat === "number" && typeof loc.lng === "number";
-        if (!hasLatLng) return loc;
-
-        const [x, y] = gpsToEPSG2263(loc.lng, loc.lat);
-        didMigrate = true;
-        return {
-          ...loc,
-          x,
-          y,
-          // Remove legacy lat/lng to keep the app consistently EPSG:2263.
-          lat: undefined,
-          lng: undefined
-        };
-      });
-
-      const migrateSegments = (segments) => {
-        if (!Array.isArray(segments)) return [];
-        return segments.map((seg) => {
-          if (!seg || !Array.isArray(seg.points)) return seg;
-          if (seg.points.length === 0) return seg;
-
-          const p0 = seg.points[0];
-          // New schema: points are [x,y] arrays.
-          if (Array.isArray(p0) && p0.length >= 2 && typeof p0[0] === "number" && typeof p0[1] === "number") {
-            return seg;
-          }
-
-          // Legacy schema: points are Leaflet lat/lng objects.
-          if (p0 && typeof p0.lat === "number" && typeof p0.lng === "number") {
-            didMigrate = true;
-            const points2263 = seg.points.map((p) => gpsToEPSG2263(p.lng, p.lat));
-            return { ...seg, points: points2263 };
-          }
-
-          return seg;
-        });
-      };
-
-      const migratedRoutes = {
-        current: {
-          segments: migrateSegments(parsed.routes?.current?.segments),
-          totalCostGold: parsed.routes?.current?.totalCostGold ?? 0
-        },
-        ibx: {
-          segments: migrateSegments(parsed.routes?.ibx?.segments),
-          totalCostGold: parsed.routes?.ibx?.totalCostGold ?? 0
-        }
-      };
-
-      state.routes = migratedRoutes;
-
-      if (didMigrate) saveState();
-    }
+    applySurveyPayload(parsed, { persist: false });
   } catch {
     // ignore
   }
 }
 
 function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (SURVEY_MODE === "participant" && participantId && participantToken) {
+    if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
+    saveDebounceTimer = setTimeout(() => {
+      void flushSaveToServer();
+    }, 450);
+    return;
+  }
+  if (SURVEY_MODE === "standalone") {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+}
+
+async function flushSaveToServer() {
+  if (SURVEY_MODE !== "participant" || !participantId || !participantToken) return;
+  try {
+    const res = await fetch(`/api/participant/${encodeURIComponent(participantId)}`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${participantToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(state)
+    });
+    if (!res.ok) console.warn("Save failed", res.status);
+  } catch (e) {
+    console.warn("Save error", e);
+  }
 }
 
 function resetDraftDrawing() {
@@ -457,6 +515,7 @@ function setStep(step) {
 }
 
 function startSegment(section) {
+  if (readOnly) return;
   if (ui.drawing.active) return;
   const modeUIKey = section === "current" ? ui.activeRouteModeCurrent : ui.activeRouteModeIbx;
   const modeBaseKey = modeKeyFromUI(modeUIKey);
@@ -495,6 +554,7 @@ function startSegment(section) {
 }
 
 function cancelSegment() {
+  if (readOnly) return;
   if (!ui.drawing.active) return;
   const section = ui.drawing.section; // capture before reset
 
@@ -529,6 +589,7 @@ function updateDraftPolyline() {
 }
 
 function undoPoint() {
+  if (readOnly) return;
   if (!ui.drawing.active) return;
   if (ui.drawing.points.length === 0) return;
   ui.drawing.points.pop();
@@ -537,6 +598,7 @@ function undoPoint() {
 }
 
 function finishSegment() {
+  if (readOnly) return;
   if (!ui.drawing.active) return;
   if (ui.drawing.points.length < 2) return;
 
@@ -612,6 +674,7 @@ function finishSegment() {
 }
 
 function clearRoutes(section) {
+  if (readOnly) return;
   state.routes[section].segments = [];
   state.routes[section].totalCostGold = 0;
   layers[section === "current" ? "currentRoutes" : "ibxRoutes"].clearLayers();
@@ -620,6 +683,7 @@ function clearRoutes(section) {
 }
 
 function addLocation(type, latlng) {
+  if (readOnly) return;
   if (type === "none") return;
   const [x, y] = gpsToEPSG2263(latlng.lng, latlng.lat);
   state.locations.push({
@@ -639,6 +703,7 @@ function addLocation(type, latlng) {
 }
 
 function clearLocations() {
+  if (readOnly) return;
   state.locations = [];
   layers.locations.clearLayers();
   saveState();
@@ -698,7 +763,7 @@ async function tryLoadGeoJSONFromFile(filename) {
   }
 }
 
-function getRoutesGeoJSON2263() {
+function getRoutesGeoJSON2263FromState(stateObj, extraProps = {}) {
   const features = [];
   const sections = [
     { key: "current", label: "Current" },
@@ -706,12 +771,10 @@ function getRoutesGeoJSON2263() {
   ];
 
   for (const sec of sections) {
-    for (const seg of state.routes[sec.key].segments) {
+    for (const seg of stateObj.routes[sec.key].segments) {
       const coords = seg.points
         .map((p) => {
-          // New schema: points are EPSG:2263 [x,y]
           if (Array.isArray(p) && p.length >= 2) return [p[0], p[1]];
-          // Legacy schema: points were Leaflet lat/lng objects
           if (p && typeof p.lat === "number" && typeof p.lng === "number") {
             const [x, y] = gpsToEPSG2263(p.lng, p.lat);
             return [x, y];
@@ -723,6 +786,7 @@ function getRoutesGeoJSON2263() {
       features.push({
         type: "Feature",
         properties: {
+          ...extraProps,
           id: seg.id,
           section: sec.label,
           mode: seg.modeLabel,
@@ -748,15 +812,22 @@ function getRoutesGeoJSON2263() {
   };
 }
 
+function getRoutesGeoJSON2263() {
+  return getRoutesGeoJSON2263FromState(state, {});
+}
+
 function csvEscape(s) {
   const str = String(s ?? "");
   if (/[,"\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
   return str;
 }
 
-function exportAllDataCSV() {
+function exportAllDataCSVFromState(stateObj, participantMeta = null) {
   const rows = [];
-  rows.push([
+  const pid = participantMeta?.id;
+  const plab = participantMeta?.label ?? "";
+  const withP = pid != null && pid !== "";
+  const baseHeader = [
     "record_type",
     "section",
     "location_type",
@@ -772,13 +843,17 @@ function exportAllDataCSV() {
     "transfer_cost_gold",
     "segment_cost_gold",
     "section_total_cost_gold_after"
-  ]);
+  ];
+  rows.push(withP ? ["participant_id", "participant_label", ...baseHeader] : baseHeader);
 
-  for (const loc of state.locations) {
+  const rowPrefix = withP ? [pid, plab] : [];
+
+  for (const loc of stateObj.locations) {
     const has2263 = typeof loc.x === "number" && typeof loc.y === "number";
     const [x2263, y2263] = has2263 ? [loc.x, loc.y] : gpsToEPSG2263(loc.lng, loc.lat);
     const latlng = has2263 ? epsg2263XYToLatLng(loc.x, loc.y) : L.latLng(loc.lat, loc.lng);
     rows.push([
+      ...rowPrefix,
       "location",
       "",
       loc.locationType,
@@ -797,8 +872,9 @@ function exportAllDataCSV() {
     ]);
   }
 
-  for (const seg of state.routes.current.segments) {
+  for (const seg of stateObj.routes.current.segments) {
     rows.push([
+      ...rowPrefix,
       "route_segment",
       "Current",
       "",
@@ -817,8 +893,9 @@ function exportAllDataCSV() {
     ]);
   }
 
-  for (const seg of state.routes.ibx.segments) {
+  for (const seg of stateObj.routes.ibx.segments) {
     rows.push([
+      ...rowPrefix,
       "route_segment",
       "IBX Assumption",
       "",
@@ -840,22 +917,119 @@ function exportAllDataCSV() {
   return rows.map((r) => r.map((cell) => csvEscape(cell)).join(",")).join("\n");
 }
 
+function exportAllDataCSV() {
+  return exportAllDataCSVFromState(state, null);
+}
+
 function exportCSV() {
-  const csv = exportAllDataCSV();
+  if (SURVEY_MODE === "conductor") {
+    if (!viewingParticipantId) {
+      window.alert("Select a participant from the list first.");
+      return;
+    }
+    const csv = exportAllDataCSVFromState(state, {
+      id: viewingParticipantId,
+      label: viewingParticipantLabel
+    });
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const safe = String(viewingParticipantLabel || "participant").replace(/[^\w\-]+/g, "_");
+    downloadFile(`nyc_supply_survey_${safe}_${ts}.csv`, csv, "text/csv;charset=utf-8");
+    return;
+  }
+  const csv = exportAllDataCSVFromState(state, null);
   const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-  downloadFile(
-    `nyc_supply_survey_all_data_${ts}.csv`,
-    csv,
-    "text/csv;charset=utf-8"
-  );
+  downloadFile(`nyc_supply_survey_all_data_${ts}.csv`, csv, "text/csv;charset=utf-8");
 }
 
 function exportRoutesGeoJSON() {
+  if (SURVEY_MODE === "conductor") {
+    if (!viewingParticipantId) {
+      window.alert("Select a participant from the list first.");
+      return;
+    }
+    const geojson = getRoutesGeoJSON2263FromState(state, {
+      participant_id: viewingParticipantId,
+      participant_label: viewingParticipantLabel
+    });
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const safe = String(viewingParticipantLabel || "participant").replace(/[^\w\-]+/g, "_");
+    downloadFile(
+      `nyc_supply_survey_routes_${safe}_${ts}.geojson`,
+      JSON.stringify(geojson, null, 2),
+      "application/geo+json;charset=utf-8"
+    );
+    return;
+  }
   const geojson = getRoutesGeoJSON2263();
   const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   downloadFile(
     `nyc_supply_survey_routes_EPSG2263_${ts}.geojson`,
     JSON.stringify(geojson, null, 2),
+    "application/geo+json;charset=utf-8"
+  );
+}
+
+async function exportAllParticipantsCSV() {
+  const secret = sessionStorage.getItem("conductorSecret");
+  if (!secret) return;
+  const res = await fetch("/api/conductor/participants", {
+    headers: { Authorization: `Bearer ${secret}` }
+  });
+  if (!res.ok) {
+    window.alert("Could not load participants.");
+    return;
+  }
+  const list = await res.json();
+  const headerRow =
+    "participant_id,participant_label,record_type,section,location_type,id,x_2263,y_2263,lat,lng,route_mode,route_mode_key,length_miles,transfer_applied_gold,transfer_cost_gold,segment_cost_gold,section_total_cost_gold_after";
+  const chunks = [headerRow];
+  for (const p of list) {
+    const r = await fetch(`/api/conductor/participants/${encodeURIComponent(p.id)}`, {
+      headers: { Authorization: `Bearer ${secret}` }
+    });
+    if (!r.ok) continue;
+    const data = await r.json();
+    const body = exportAllDataCSVFromState(data.state, { id: data.id, label: data.label });
+    const lines = body.split("\n");
+    chunks.push(...lines.slice(1));
+  }
+  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  downloadFile(`nyc_supply_survey_all_participants_${ts}.csv`, chunks.join("\n"), "text/csv;charset=utf-8");
+}
+
+async function exportAllParticipantsGeoJSON() {
+  const secret = sessionStorage.getItem("conductorSecret");
+  if (!secret) return;
+  const res = await fetch("/api/conductor/participants", {
+    headers: { Authorization: `Bearer ${secret}` }
+  });
+  if (!res.ok) {
+    window.alert("Could not load participants.");
+    return;
+  }
+  const list = await res.json();
+  const allFeatures = [];
+  for (const p of list) {
+    const r = await fetch(`/api/conductor/participants/${encodeURIComponent(p.id)}`, {
+      headers: { Authorization: `Bearer ${secret}` }
+    });
+    if (!r.ok) continue;
+    const data = await r.json();
+    const fc = getRoutesGeoJSON2263FromState(data.state, {
+      participant_id: data.id,
+      participant_label: data.label
+    });
+    allFeatures.push(...fc.features);
+  }
+  const out = {
+    type: "FeatureCollection",
+    crs: { type: "name", properties: { name: "urn:ogc:def:crs:EPSG:2263" } },
+    features: allFeatures
+  };
+  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  downloadFile(
+    `nyc_supply_survey_all_participants_routes_${ts}.geojson`,
+    JSON.stringify(out, null, 2),
     "application/geo+json;charset=utf-8"
   );
 }
@@ -902,32 +1076,34 @@ function setupUI() {
     });
   });
 
-  document.getElementById("clearLocations").addEventListener("click", clearLocations);
+  document.getElementById("clearLocations")?.addEventListener("click", clearLocations);
 
   // Current route mode buttons
   document.querySelectorAll('[data-route-mode="huge"]').forEach((b) => b.addEventListener("click", () => (ui.activeRouteModeCurrent = "huge")));
   document.querySelectorAll('[data-route-mode="small"]').forEach((b) => b.addEventListener("click", () => (ui.activeRouteModeCurrent = "small")));
   document.querySelectorAll('[data-route-mode="train"]').forEach((b) => b.addEventListener("click", () => (ui.activeRouteModeCurrent = "train")));
 
-  document.getElementById("startSegmentCurrent").addEventListener("click", () => startSegment("current"));
-  document.getElementById("finishSegmentCurrent").addEventListener("click", finishSegment);
-  document.getElementById("undoPointCurrent").addEventListener("click", undoPoint);
-  document.getElementById("cancelSegmentCurrent").addEventListener("click", cancelSegment);
-  document.getElementById("clearCurrentRoutes").addEventListener("click", () => clearRoutes("current"));
+  document.getElementById("startSegmentCurrent")?.addEventListener("click", () => startSegment("current"));
+  document.getElementById("finishSegmentCurrent")?.addEventListener("click", finishSegment);
+  document.getElementById("undoPointCurrent")?.addEventListener("click", undoPoint);
+  document.getElementById("cancelSegmentCurrent")?.addEventListener("click", cancelSegment);
+  document.getElementById("clearCurrentRoutes")?.addEventListener("click", () => clearRoutes("current"));
 
   // IBX route mode buttons
   document.querySelectorAll('[data-route-mode="huge_ibx"]').forEach((b) => b.addEventListener("click", () => (ui.activeRouteModeIbx = "huge_ibx")));
   document.querySelectorAll('[data-route-mode="small_ibx"]').forEach((b) => b.addEventListener("click", () => (ui.activeRouteModeIbx = "small_ibx")));
   document.querySelectorAll('[data-route-mode="ibx"]').forEach((b) => b.addEventListener("click", () => (ui.activeRouteModeIbx = "ibx")));
 
-  document.getElementById("startSegmentIbX").addEventListener("click", () => startSegment("ibx"));
-  document.getElementById("finishSegmentIbX").addEventListener("click", finishSegment);
-  document.getElementById("undoPointIbX").addEventListener("click", undoPoint);
-  document.getElementById("cancelSegmentIbX").addEventListener("click", cancelSegment);
-  document.getElementById("clearIbxRoutes").addEventListener("click", () => clearRoutes("ibx"));
+  document.getElementById("startSegmentIbX")?.addEventListener("click", () => startSegment("ibx"));
+  document.getElementById("finishSegmentIbX")?.addEventListener("click", finishSegment);
+  document.getElementById("undoPointIbX")?.addEventListener("click", undoPoint);
+  document.getElementById("cancelSegmentIbX")?.addEventListener("click", cancelSegment);
+  document.getElementById("clearIbxRoutes")?.addEventListener("click", () => clearRoutes("ibx"));
 
-  document.getElementById("exportCSV").addEventListener("click", exportCSV);
-  document.getElementById("exportRoutesGeoJSON").addEventListener("click", exportRoutesGeoJSON);
+  document.getElementById("exportCSV")?.addEventListener("click", exportCSV);
+  document.getElementById("exportRoutesGeoJSON")?.addEventListener("click", exportRoutesGeoJSON);
+  document.getElementById("exportAllParticipantsCSV")?.addEventListener("click", () => void exportAllParticipantsCSV());
+  document.getElementById("exportAllParticipantsGeoJSON")?.addEventListener("click", () => void exportAllParticipantsGeoJSON());
 }
 
 function setupMap() {
@@ -951,6 +1127,7 @@ function setupMap() {
   // ibxLine is only shown when user enters Step 3 (handled in setStep()).
 
   map.on("click", (e) => {
+    if (readOnly) return;
     if (ui.drawing.active) {
       ui.drawing.points.push(e.latlng);
       const [x, y] = gpsToEPSG2263(e.latlng.lng, e.latlng.lat);
@@ -963,14 +1140,7 @@ function setupMap() {
   });
 }
 
-async function boot() {
-  ensureProjDefs();
-  loadState();
-  setupUI();
-  setupMap();
-  rebuildFromState();
-
-  // Auto-load IBX GeoJSON when served over HTTP (fetch fails on file://).
+async function loadIBXAssets() {
   const [lineGeojson, stationsGeojson] = await Promise.all([
     tryLoadGeoJSONFromFile("./IBX_Line_4326.geojson"),
     tryLoadGeoJSONFromFile("./IBX_Stations.geojson")
@@ -979,11 +1149,217 @@ async function boot() {
   if (lineGeojson) loadIBXGeoJSONToLayer(lineGeojson);
   else initIBXPlaceholderLine();
   if (stationsGeojson) loadIBXStationsGeoJSONToLayer(stationsGeojson);
+}
+
+async function bootParticipant() {
+  const params = new URLSearchParams(location.search);
+  const id = params.get("participant") || "";
+  const token = params.get("token") || "";
+  if (!id || !token) {
+    return;
+  }
+
+  document.querySelector('[data-step="export"]')?.classList.add("is-hidden");
+  document.querySelector('[data-step-panel="export"]')?.classList.add("is-hidden");
+
+  participantId = id;
+  participantToken = token;
+
+  ensureProjDefs();
+  try {
+    const res = await fetch(`/api/participant/${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) throw new Error("bad status");
+    const parsed = await res.json();
+    applySurveyPayload(parsed, { persist: false });
+  } catch {
+    document.documentElement.classList.remove("participant-token-ok");
+    window.alert("Could not load your survey. Check your link or contact the facilitator.");
+    return;
+  }
+
+  setupUI();
+  setupMap();
+  rebuildFromState();
+  await loadIBXAssets();
 
   setStep("locations");
   uiUpdateStats();
-  document.getElementById("mapHint").textContent = "Select a tool on the left, then click the map to add points or draw segments.";
+  document.getElementById("mapHint").textContent =
+    "Select a tool on the left, then click the map to add points or draw segments.";
+
+  window.addEventListener("pagehide", () => {
+    if (SURVEY_MODE !== "participant" || !participantId || !participantToken) return;
+    if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
+    try {
+      void fetch(`/api/participant/${encodeURIComponent(participantId)}`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${participantToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(state),
+        keepalive: true
+      });
+    } catch {
+      // ignore
+    }
+  });
 }
 
-boot();
+let conductorInitialized = false;
+
+async function tryConductorUnlock() {
+  const s = sessionStorage.getItem("conductorSecret");
+  if (!s) return false;
+  const res = await fetch("/api/conductor/participants", {
+    headers: { Authorization: `Bearer ${s}` }
+  });
+  if (!res.ok) {
+    sessionStorage.removeItem("conductorSecret");
+    return false;
+  }
+  return true;
+}
+
+async function refreshParticipantList() {
+  const ul = document.getElementById("participantList");
+  const secret = sessionStorage.getItem("conductorSecret");
+  if (!ul || !secret) return;
+  const res = await fetch("/api/conductor/participants", {
+    headers: { Authorization: `Bearer ${secret}` }
+  });
+  if (!res.ok) return;
+  const list = await res.json();
+  ul.innerHTML = "";
+  for (const p of list) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "participantList__btn";
+    btn.dataset.participantId = p.id;
+    const t = new Date(p.updatedAt);
+    btn.textContent = `${p.label} · ${t.toLocaleString()} · ${p.counts.locations} loc / ${p.counts.currentSegments + p.counts.ibxSegments} seg`;
+    btn.addEventListener("click", () => void selectConductorParticipant(p.id));
+    li.appendChild(btn);
+    ul.appendChild(li);
+  }
+}
+
+async function selectConductorParticipant(id) {
+  const secret = sessionStorage.getItem("conductorSecret");
+  if (!secret) return;
+  const res = await fetch(`/api/conductor/participants/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${secret}` }
+  });
+  if (!res.ok) {
+    window.alert("Could not load that participant.");
+    return;
+  }
+  const data = await res.json();
+  viewingParticipantId = data.id;
+  viewingParticipantLabel = data.label;
+  applySurveyPayload(data.state, { persist: false });
+  rebuildFromState();
+  uiUpdateStats();
+  document.getElementById("conductorViewingLabel").textContent = data.label;
+  document.querySelectorAll(".participantList__btn").forEach((b) => {
+    b.classList.toggle("is-active", b.dataset.participantId === id);
+  });
+  setStep("locations");
+}
+
+function setupConductorCreateLink() {
+  document.getElementById("createParticipantBtn")?.addEventListener("click", async () => {
+    const secret = sessionStorage.getItem("conductorSecret");
+    const labelIn = document.getElementById("newParticipantLabel");
+    const label = String(labelIn?.value ?? "").trim() || "Participant";
+    if (!secret) return;
+    const res = await fetch("/api/participants", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${secret}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ label })
+    });
+    if (!res.ok) {
+      window.alert("Could not create link. Check CONDUCTOR_SECRET on the server.");
+      return;
+    }
+    const data = await res.json();
+    const out = document.getElementById("shareUrlOutput");
+    if (out) {
+      out.value = data.shareUrl;
+      out.classList.remove("is-hidden");
+    }
+    labelIn.value = "";
+    await refreshParticipantList();
+  });
+}
+
+async function initConductorSurveyUi() {
+  if (conductorInitialized) return;
+  conductorInitialized = true;
+  document.getElementById("app")?.classList.add("app--readonly");
+  setupUI();
+  setupMap();
+  rebuildFromState();
+  await loadIBXAssets();
+  setStep("locations");
+  uiUpdateStats();
+  document.getElementById("mapHint").textContent =
+    "Select a participant in the list, then use tabs 1–3 to review their map (read-only).";
+  setupConductorCreateLink();
+}
+
+async function bootConductor() {
+  readOnly = true;
+  ensureProjDefs();
+
+  const loginEl = document.getElementById("conductorLogin");
+  const workspace = document.getElementById("conductorWorkspace");
+
+  if (await tryConductorUnlock()) {
+    loginEl?.classList.add("is-hidden");
+    workspace?.classList.remove("is-hidden");
+    await initConductorSurveyUi();
+    await refreshParticipantList();
+  } else {
+    loginEl?.classList.remove("is-hidden");
+    workspace?.classList.add("is-hidden");
+    document.getElementById("conductorUnlockBtn")?.addEventListener("click", async () => {
+      const inp = document.getElementById("conductorSecretInput");
+      const val = String(inp?.value ?? "").trim();
+      if (!val) return;
+      sessionStorage.setItem("conductorSecret", val);
+      if (await tryConductorUnlock()) {
+        loginEl?.classList.add("is-hidden");
+        workspace?.classList.remove("is-hidden");
+        await initConductorSurveyUi();
+        await refreshParticipantList();
+      } else {
+        window.alert("Invalid conductor secret.");
+      }
+    });
+  }
+}
+
+async function bootStandalone() {
+  ensureProjDefs();
+  loadStateFromLocalStorage();
+  setupUI();
+  setupMap();
+  rebuildFromState();
+  await loadIBXAssets();
+  setStep("locations");
+  uiUpdateStats();
+  document.getElementById("mapHint").textContent =
+    "Select a tool on the left, then click the map to add points or draw segments.";
+}
+
+if (SURVEY_MODE === "participant") void bootParticipant();
+else if (SURVEY_MODE === "conductor") void bootConductor();
+else bootStandalone();
 
