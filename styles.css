@@ -546,6 +546,33 @@ html:not(.participant-token-ok) body[data-survey-mode="participant"] #app {
   resize: vertical;
 }
 
+.participantFilterBar {
+  margin-bottom: 8px;
+}
+
+.participantFilterToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.participantFilterToggle__chevron {
+  display: inline-block;
+  transition: transform 0.15s ease;
+  transform: rotate(0deg);
+  color: var(--accent);
+}
+
+.participantFilterToggle--open .participantFilterToggle__chevron {
+  transform: rotate(90deg);
+}
+
+.participantFilterPanel {
+  padding-top: 4px;
+  margin-bottom: 4px;
+}
+
 .participantPicker {
   display: grid;
   grid-template-columns: 140px 1fr;

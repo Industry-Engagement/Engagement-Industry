@@ -1379,6 +1379,34 @@ function alertConductorFailure(result) {
   }
 }
 
+function setupParticipantFilterToggle() {
+  const btn = document.getElementById("participantFilterToggle");
+  const panel = document.getElementById("participantFilterPanel");
+  const label = document.getElementById("participantFilterToggleLabel");
+  if (!btn || !panel || btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+
+  const sync = () => {
+    const open = !panel.classList.contains("is-hidden");
+    btn.setAttribute("aria-expanded", String(open));
+    btn.classList.toggle("participantFilterToggle--open", open);
+    if (label) label.textContent = open ? "Hide participant filter" : "Show participant filter";
+  };
+
+  btn.addEventListener("click", () => {
+    panel.classList.toggle("is-hidden");
+    sync();
+    if (map && !panel.classList.contains("is-hidden")) {
+      requestAnimationFrame(() => {
+        map.invalidateSize();
+        setTimeout(() => map.invalidateSize(), 200);
+      });
+    }
+  });
+
+  sync();
+}
+
 async function refreshParticipantList() {
   const search = document.getElementById("participantSearch");
   const ul = document.getElementById("participantList");
@@ -1389,6 +1417,7 @@ async function refreshParticipantList() {
   conductorParticipantsCache = Array.isArray(list) ? list : [];
 
   renderFilteredParticipantList();
+  setupParticipantFilterToggle();
 
   if (search && !search.dataset.bound) {
     search.dataset.bound = "1";
@@ -1462,7 +1491,7 @@ async function initConductorSurveyUi() {
   const hint = document.getElementById("mapHint");
   if (hint) {
     hint.textContent =
-      "Select a participant above, then use tabs 1–3 to review their map (read-only).";
+      "Open “Show participant filter” to search and select a participant, then use tabs 1–3 to review their map (read-only).";
   }
   setupConductorCreateLink();
   // Map was created after #app became visible; still refresh tile/layout after flex settles.

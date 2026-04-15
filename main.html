@@ -37,20 +37,34 @@
           rows="3"
           aria-label="Sharing link"
         ></textarea>
-        <div class="participantPicker">
-          <label class="participantPicker__label" for="participantSearch">Find participant</label>
-          <input
-            id="participantSearch"
-            class="participantPicker__input"
-            type="search"
-            placeholder="Type to search (name, id)…"
-            autocomplete="off"
-          />
-          <p class="participantPicker__hint">
-            Click a row to view on the map. Delete removes that participant permanently.
-          </p>
+        <div class="participantFilterBar">
+          <button
+            type="button"
+            id="participantFilterToggle"
+            class="ghostBtn participantFilterToggle"
+            aria-expanded="false"
+            aria-controls="participantFilterPanel"
+          >
+            <span class="participantFilterToggle__chevron" aria-hidden="true">▸</span>
+            <span id="participantFilterToggleLabel">Show participant filter</span>
+          </button>
         </div>
-        <ul id="participantList" class="participantList participantList--with-delete" aria-label="Filtered participants"></ul>
+        <div id="participantFilterPanel" class="participantFilterPanel is-hidden">
+          <div class="participantPicker">
+            <label class="participantPicker__label" for="participantSearch">Find participant</label>
+            <input
+              id="participantSearch"
+              class="participantPicker__input"
+              type="search"
+              placeholder="Type to search (name, id)…"
+              autocomplete="off"
+            />
+            <p class="participantPicker__hint">
+              Click a row to view on the map. Delete removes that participant permanently.
+            </p>
+          </div>
+          <ul id="participantList" class="participantList participantList--with-delete" aria-label="Filtered participants"></ul>
+        </div>
       </div>
 
       <div id="app">
