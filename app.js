@@ -34,6 +34,7 @@ const TRANSFER_COST_GOLD = {
 };
 
 const LOCATION_TYPES = {
+  workplace: { label: "Workplace (your company)", color: "#c94f7c" },
   import: { label: "Import", color: "#5bbcff" },
   export: { label: "Export", color: "#4d7cff" },
   manufacturing: { label: "Manufacturing", color: "#6ee7b7" },
@@ -49,6 +50,14 @@ function formatGold(n) {
 
 function uid(prefix) {
   return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now()}`;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function downloadFile(filename, content, mimeType) {
@@ -271,6 +280,7 @@ const ui = {
 };
 
 const state = {
+  industry: { companyName: "" },
   locations: [],
   routes: {
     current: { segments: [], totalCostGold: 0 },
@@ -352,6 +362,10 @@ function applySurveyPayload(parsed, options = {}) {
   };
 
   state.ibxLine = parsed.ibxLine ?? { loaded: state.ibxLine?.loaded ?? false };
+
+  state.industry = {
+    companyName: String(parsed.industry?.companyName ?? "")
+  };
 
   if (didMigrate && persist) saveState();
 }
@@ -455,7 +469,11 @@ function rebuildFromState() {
         ? epsg2263XYToLatLng(loc.x, loc.y)
         : L.latLng(loc.lat, loc.lng);
     const marker = L.marker(latlng, { icon: markerIcon(meta.color), draggable: false });
-    marker.bindPopup(`${meta.label}<br/>ID: ${loc.id}`);
+    const companyNote =
+      loc.locationType === "workplace" && state.industry?.companyName
+        ? `<br/>${escapeHtml(state.industry.companyName)}`
+        : "";
+    marker.bindPopup(`${meta.label}${companyNote}<br/>ID: ${loc.id}`);
     layers.locations.addLayer(marker);
   }
 
@@ -487,6 +505,20 @@ function uiUpdateStats() {
   set("exportLocationsCount", String(state.locations.length));
   set("exportCurrentSegments", String(state.routes.current.segments.length));
   set("exportIbXSegments", String(state.routes.ibx.segments.length));
+
+  const indEl = document.getElementById("participantIndustrySummary");
+  if (indEl) {
+    const c = String(state.industry?.companyName ?? "").trim();
+    indEl.textContent = c ? `Company / industry you entered: ${c}` : "";
+    indEl.classList.toggle("is-hidden", !c);
+  }
+
+  const condInd = document.getElementById("conductorIndustryLabel");
+  if (condInd && SURVEY_MODE === "conductor") {
+    const c = String(state.industry?.companyName ?? "").trim();
+    condInd.textContent = c ? `Industry / company: ${c}` : "";
+    condInd.classList.toggle("is-hidden", !c || !viewingParticipantId);
+  }
 }
 
 function setStep(step) {
@@ -714,6 +746,9 @@ function clearRoutes(section) {
 function addLocation(type, latlng) {
   if (readOnly) return;
   if (type === "none") return;
+  if (type === "workplace") {
+    state.locations = state.locations.filter((l) => l.locationType !== "workplace");
+  }
   const [x, y] = gpsToEPSG2263(latlng.lng, latlng.lat);
   state.locations.push({
     id: uid("loc"),
@@ -722,11 +757,7 @@ function addLocation(type, latlng) {
     y
   });
 
-  const meta = LOCATION_TYPES[type] ?? LOCATION_TYPES.other;
-  const marker = L.marker([latlng.lat, latlng.lng], { icon: markerIcon(meta.color), draggable: false });
-  marker.bindPopup(`${meta.label}<br/>ID: ${state.locations[state.locations.length - 1].id}`);
-  layers.locations.addLayer(marker);
-
+  rebuildFromState();
   saveState();
   uiUpdateStats();
 }
@@ -856,6 +887,7 @@ function exportAllDataCSVFromState(stateObj, participantMeta = null) {
   const pid = participantMeta?.id;
   const plab = participantMeta?.label ?? "";
   const withP = pid != null && pid !== "";
+  const industryCo = String(stateObj.industry?.companyName ?? "");
   const baseHeader = [
     "record_type",
     "section",
@@ -873,9 +905,11 @@ function exportAllDataCSVFromState(stateObj, participantMeta = null) {
     "segment_cost_gold",
     "section_total_cost_gold_after"
   ];
-  rows.push(withP ? ["participant_id", "participant_label", ...baseHeader] : baseHeader);
+  rows.push(
+    withP ? ["participant_id", "participant_label", "industry_company", ...baseHeader] : baseHeader
+  );
 
-  const rowPrefix = withP ? [pid, plab] : [];
+  const rowPrefix = withP ? [pid, plab, industryCo] : [];
 
   for (const loc of stateObj.locations) {
     const has2263 = typeof loc.x === "number" && typeof loc.y === "number";
@@ -1008,7 +1042,7 @@ async function exportAllParticipantsCSV() {
   }
   const list = await res.json();
   const headerRow =
-    "participant_id,participant_label,record_type,section,location_type,id,x_2263,y_2263,lat,lng,route_mode,route_mode_key,length_miles,transfer_applied_gold,transfer_cost_gold,segment_cost_gold,section_total_cost_gold_after";
+    "participant_id,participant_label,industry_company,record_type,section,location_type,id,x_2263,y_2263,lat,lng,route_mode,route_mode_key,length_miles,transfer_applied_gold,transfer_cost_gold,segment_cost_gold,section_total_cost_gold_after";
   const chunks = [headerRow];
   for (const p of list) {
     const r = await fetch(`/api/conductor/participants/${encodeURIComponent(p.id)}`);
@@ -1172,6 +1206,57 @@ async function loadIBXAssets() {
   if (stationsGeojson) loadIBXStationsGeoJSONToLayer(stationsGeojson);
 }
 
+function setParticipantMapHintAfterIndustryGate() {
+  const hasWorkplace = state.locations.some((l) => l.locationType === "workplace");
+  const hintEl = document.getElementById("mapHint");
+  if (!hintEl) return;
+  if (!hasWorkplace) {
+    ui.locationType = "workplace";
+    hintEl.textContent =
+      "Workplace (your company) is selected. Click the map once to mark where that company is located. You can switch modes below to add other site types.";
+  } else {
+    ui.locationType = "none";
+    hintEl.textContent =
+      "Select a location type on the left, then click the map to add points or draw routes on later steps.";
+  }
+}
+
+async function finishParticipantBoot() {
+  setupUI();
+  setupMap();
+  rebuildFromState();
+  await loadIBXAssets();
+  if (map) {
+    requestAnimationFrame(() => map.invalidateSize());
+    setTimeout(() => map.invalidateSize(), 200);
+  }
+
+  setStep("locations");
+  uiUpdateStats();
+  setParticipantMapHintAfterIndustryGate();
+
+  if (!document.body.dataset.participantPagehideBound) {
+    document.body.dataset.participantPagehideBound = "1";
+    window.addEventListener("pagehide", () => {
+      if (SURVEY_MODE !== "participant" || !participantId || !participantToken) return;
+      if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
+      try {
+        void fetch(`/api/participant/${encodeURIComponent(participantId)}`, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${participantToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(state),
+          keepalive: true
+        });
+      } catch {
+        // ignore
+      }
+    });
+  }
+}
+
 async function bootParticipant() {
   const params = new URLSearchParams(location.search);
   const id = params.get("participant") || "";
@@ -1202,46 +1287,57 @@ async function bootParticipant() {
   participantToken = token;
 
   ensureProjDefs();
+  let loadedPayload = null;
   try {
     const res = await fetch(`/api/participant/${encodeURIComponent(id)}`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (!res.ok) throw new Error("bad status");
-    const parsed = await res.json();
-    applySurveyPayload(parsed, { persist: false });
+    loadedPayload = await res.json();
+    applySurveyPayload(loadedPayload, { persist: false });
   } catch {
     document.documentElement.classList.remove("participant-token-ok");
     window.alert("Could not load your survey. Check your link or contact the facilitator.");
     return;
   }
 
-  setupUI();
-  setupMap();
-  rebuildFromState();
-  await loadIBXAssets();
-
-  setStep("locations");
-  uiUpdateStats();
-  document.getElementById("mapHint").textContent =
-    "Select a tool on the left, then click the map to add points or draw segments.";
-
-  window.addEventListener("pagehide", () => {
-    if (SURVEY_MODE !== "participant" || !participantId || !participantToken) return;
-    if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
-    try {
-      void fetch(`/api/participant/${encodeURIComponent(participantId)}`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${participantToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(state),
-        keepalive: true
-      });
-    } catch {
-      // ignore
+  const hasIndustryField = Object.prototype.hasOwnProperty.call(loadedPayload, "industry");
+  const hasSurveyProgress =
+    (state.locations?.length ?? 0) > 0 ||
+    (state.routes?.current?.segments?.length ?? 0) > 0 ||
+    (state.routes?.ibx?.segments?.length ?? 0) > 0;
+  const needsIndustry =
+    hasIndustryField &&
+    !String(state.industry?.companyName ?? "").trim() &&
+    !hasSurveyProgress;
+  if (needsIndustry) {
+    const gate = document.getElementById("industryGate");
+    const input = document.getElementById("industryCompanyInput");
+    const btn = document.getElementById("industryContinueBtn");
+    const submit = () => {
+      const name = String(input?.value ?? "").trim();
+      if (!name) {
+        window.alert("Please enter the industry or company you work in.");
+        return;
+      }
+      state.industry = { companyName: name };
+      gate?.classList.remove("is-open");
+      void flushSaveToServer();
+      void finishParticipantBoot();
+    };
+    if (btn) btn.onclick = submit;
+    if (input) {
+      input.onkeydown = (e) => {
+        if (e.key === "Enter") submit();
+      };
+      input.value = "";
     }
-  });
+    gate?.classList.add("is-open");
+    if (input) requestAnimationFrame(() => input.focus());
+    return;
+  }
+
+  await finishParticipantBoot();
 }
 
 let conductorInitialized = false;
@@ -1252,7 +1348,8 @@ function matchesParticipantQuery(p, query) {
   if (!q) return true;
   const label = String(p?.label ?? "").toLowerCase();
   const id = String(p?.id ?? "").toLowerCase();
-  return label.includes(q) || id.includes(q);
+  const ind = String(p?.industryCompany ?? "").toLowerCase();
+  return label.includes(q) || id.includes(q) || ind.includes(q);
 }
 
 function renderFilteredParticipantList() {
@@ -1276,7 +1373,8 @@ function populateParticipantDeleteList(ul, list, currentId) {
     selectBtn.className = "participantRow__select";
     if (p.id === currentId) selectBtn.classList.add("is-active");
     const t = new Date(p.updatedAt);
-    selectBtn.textContent = `${p.label} · ${t.toLocaleString()} · ${p.counts.locations} loc / ${p.counts.currentSegments + p.counts.ibxSegments} seg`;
+    const ind = p.industryCompany ? ` · ${p.industryCompany}` : "";
+    selectBtn.textContent = `${p.label} · ${t.toLocaleString()} · ${p.counts.locations} loc / ${p.counts.currentSegments + p.counts.ibxSegments} seg${ind}`;
     selectBtn.addEventListener("click", () => void selectConductorParticipant(p.id));
 
     const delBtn = document.createElement("button");
@@ -1312,6 +1410,7 @@ async function deleteConductorParticipant(p) {
   if (viewingParticipantId === p.id) {
     viewingParticipantId = null;
     viewingParticipantLabel = "";
+    state.industry = { companyName: "" };
     state.locations = [];
     state.routes = {
       current: { segments: [], totalCostGold: 0 },

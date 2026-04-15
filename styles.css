@@ -341,6 +341,42 @@ html.participant-welcome-ok #welcomeGate {
   display: none;
 }
 
+/* Industry questionnaire (participant index): full-screen overlay after welcome */
+#industryGate {
+  display: none;
+  z-index: 1001;
+}
+
+#industryGate.is-open {
+  display: flex;
+}
+
+.industryGate__label {
+  display: block;
+  margin-top: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.industryGate__input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  font: inherit;
+  color: var(--text);
+  background: #fff;
+}
+
+.industryGate__input:focus {
+  outline: none;
+  border-color: rgba(201, 79, 124, 0.55);
+  box-shadow: 0 0 0 3px rgba(201, 79, 124, 0.15);
+}
+
 /* Participant index only: hide main #app until ?participant=&token= are present */
 html:not(.participant-token-ok) body[data-survey-mode="participant"] #app {
   display: none;
@@ -511,6 +547,15 @@ html:not(.participant-token-ok) body[data-survey-mode="participant"] #app {
 .conductorToolbar__hint {
   font-size: 13px;
   color: var(--accent2);
+}
+
+.conductorToolbar__industry {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .conductorToolbar__create {

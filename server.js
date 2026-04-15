@@ -38,6 +38,7 @@ function randomToken() {
 
 function defaultSurveyJson() {
   return JSON.stringify({
+    industry: { companyName: "" },
     locations: [],
     routes: {
       current: { segments: [], totalCostGold: 0 },
@@ -117,11 +118,13 @@ app.get("/api/conductor/participants", (req, res) => {
     let locCount = 0;
     let segCurrent = 0;
     let segIbx = 0;
+    let industryCompany = "";
     try {
       const s = JSON.parse(db.prepare(`SELECT survey_json FROM participants WHERE id = ?`).get(r.id).survey_json);
       locCount = s.locations?.length ?? 0;
       segCurrent = s.routes?.current?.segments?.length ?? 0;
       segIbx = s.routes?.ibx?.segments?.length ?? 0;
+      industryCompany = String(s.industry?.companyName ?? "").trim();
     } catch {
       // ignore
     }
@@ -130,6 +133,7 @@ app.get("/api/conductor/participants", (req, res) => {
       label: r.label,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
+      industryCompany: industryCompany ? industryCompany.slice(0, 80) : "",
       counts: { locations: locCount, currentSegments: segCurrent, ibxSegments: segIbx }
     };
   });

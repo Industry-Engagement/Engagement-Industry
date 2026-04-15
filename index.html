@@ -48,6 +48,34 @@
       </div>
     </div>
 
+    <div
+      id="industryGate"
+      class="participantGate industryGate"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="industryGateTitle"
+    >
+      <div class="participantGate__card industryGate__card">
+        <h1 class="participantGate__h1" id="industryGateTitle">What industry company do you work in?</h1>
+        <p class="participantGate__p">
+          Type the name of your employer or the industry you work in. Next, you will mark that company’s location on
+          the map.
+        </p>
+        <label class="industryGate__label" for="industryCompanyInput">Your answer</label>
+        <input
+          id="industryCompanyInput"
+          class="industryGate__input"
+          type="text"
+          maxlength="500"
+          autocomplete="organization"
+          placeholder="e.g. ABC Logistics, food manufacturing, etc."
+        />
+        <div class="participantGate__actions">
+          <button class="primaryBtn" id="industryContinueBtn" type="button">Continue to map</button>
+        </div>
+      </div>
+    </div>
+
     <div id="app">
       <header class="topbar">
         <div class="topbar__title">NYC Supply Chain Survey</div>
@@ -75,12 +103,20 @@
 
           <section class="step" data-step-panel="locations">
             <h2 class="panel__h2">Mark optional locations</h2>
+            <p class="panel__hint participantIndustrySummary is-hidden" id="participantIndustrySummary"></p>
             <p class="panel__hint">
-              Choose a location type, then click the map to add a point. You can
-              add as many or as few as you need.
+              Choose a location type, then click the map to add a point. Start with your workplace, then add other
+              sites if you like.
             </p>
 
             <div class="buttonRow">
+              <button
+                class="modeBtn"
+                data-location-type="workplace"
+                type="button"
+              >
+                Workplace (your company)
+              </button>
               <button
                 class="modeBtn"
                 data-location-type="import"
