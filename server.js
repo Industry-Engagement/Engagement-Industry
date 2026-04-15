@@ -148,6 +148,15 @@ app.get("/api/conductor/participants/:id", (req, res) => {
   });
 });
 
+app.delete("/api/conductor/participants/:id", (req, res) => {
+  if (!authConductor(req, res)) return;
+  const id = String(req.params.id || "");
+  if (!id) return res.status(400).json({ error: "Missing id" });
+  const info = db.prepare(`DELETE FROM participants WHERE id = ?`).run(id);
+  if (info.changes === 0) return res.status(404).json({ error: "Not found" });
+  res.json({ ok: true });
+});
+
 app.use(express.static(__dirname));
 
 app.listen(PORT, () => {

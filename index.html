@@ -16,6 +16,9 @@
           if (p.get("participant") && p.get("token")) {
             document.documentElement.classList.add("participant-token-ok");
           }
+          if (sessionStorage.getItem("participantWelcomeConfirmed") === "1") {
+            document.documentElement.classList.add("participant-welcome-ok");
+          }
         } catch (e) {}
       })();
     </script>
@@ -28,6 +31,20 @@
           Open the unique link your facilitator sent you. This page does not work without
           <code class="participantGate__code">?participant=…&amp;token=…</code> in the address bar.
         </p>
+      </div>
+    </div>
+
+    <div id="welcomeGate" class="participantGate" role="dialog" aria-live="polite">
+      <div class="participantGate__card welcomeGate__card">
+        <h1 class="participantGate__h1">Welcome and thank you to participate in our survey!</h1>
+        <p class="participantGate__p welcomeGate__p">
+          This survey is about gathering information about the industry along IBX. You may need to answer a sequence
+          of questions about the industry work you are working on, helping us make a better arrangement for freight
+          transportation with IBX.
+        </p>
+        <div class="participantGate__actions">
+          <button class="primaryBtn" id="welcomeConfirmBtn" type="button">Confirm</button>
+        </div>
       </div>
     </div>
 

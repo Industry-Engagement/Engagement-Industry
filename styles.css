@@ -1,13 +1,16 @@
 :root {
-  --bg: #0b1220;
-  --panel: #0f1a2e;
-  --panel2: #111f39;
-  --text: #e6eefc;
-  --muted: #9cb0d0;
-  --accent: #5bbcff;
-  --accent2: #6ee7b7;
-  --danger: #ff6b6b;
-  --border: rgba(255, 255, 255, 0.12);
+  /* Light pink / blush theme (main + participant sites) */
+  --bg: #fef5f8;
+  --panel: #ffffff;
+  --panel2: #fdeef4;
+  --text: #3d2a32;
+  --muted: #7d5f6c;
+  --accent: #c94f7c;
+  --accent2: #a8557a;
+  --danger: #c62828;
+  --border: rgba(61, 42, 50, 0.14);
+  --shadow: rgba(61, 42, 50, 0.08);
+  --shadow-strong: rgba(61, 42, 50, 0.12);
 }
 
 html,
@@ -35,8 +38,9 @@ body {
   justify-content: space-between;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
-  background: rgba(15, 26, 46, 0.7);
-  backdrop-filter: blur(6px);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 0 var(--shadow);
 }
 
 .topbar__title {
@@ -63,12 +67,13 @@ body {
 }
 
 .panel {
-  background: linear-gradient(180deg, rgba(17, 31, 57, 0.9), rgba(15, 26, 46, 0.9));
+  background: linear-gradient(180deg, #ffffff, #fff8fb);
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
   padding: 12px;
   min-height: 0;
+  box-shadow: 0 4px 24px var(--shadow);
 }
 
 .tabs {
@@ -83,14 +88,15 @@ body {
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--panel2);
   color: var(--text);
   cursor: pointer;
 }
 
 .tab.is-active {
-  border-color: rgba(91, 188, 255, 0.7);
-  box-shadow: 0 0 0 3px rgba(91, 188, 255, 0.18);
+  border-color: rgba(201, 79, 124, 0.55);
+  box-shadow: 0 0 0 3px rgba(201, 79, 124, 0.15);
+  background: #ffffff;
 }
 
 .step {
@@ -127,7 +133,7 @@ body {
   padding: 9px 10px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.02);
+  background: #ffffff;
   color: var(--text);
   cursor: pointer;
   font-size: 13px;
@@ -147,8 +153,8 @@ body {
 .primaryBtn {
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid rgba(110, 231, 183, 0.7);
-  background: rgba(110, 231, 183, 0.12);
+  border: 1px solid rgba(201, 79, 124, 0.45);
+  background: rgba(201, 79, 124, 0.12);
   color: var(--text);
   cursor: pointer;
   font-weight: 650;
@@ -159,11 +165,31 @@ body {
   cursor: not-allowed;
 }
 
+.dangerBtn {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(198, 40, 40, 0.45);
+  background: rgba(198, 40, 40, 0.1);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.dangerBtn:hover {
+  border-color: rgba(198, 40, 40, 0.65);
+  background: rgba(198, 40, 40, 0.14);
+}
+
+.dangerBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .ghostBtn {
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.02);
+  background: #ffffff;
   color: var(--text);
   cursor: pointer;
 }
@@ -186,7 +212,7 @@ body {
   flex-direction: column;
   gap: 4px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--panel2);
   border-radius: 10px;
   padding: 10px;
   min-width: 150px;
@@ -204,8 +230,8 @@ body {
 
 .panel__note {
   margin-top: 10px;
-  border: 1px dashed rgba(255, 255, 255, 0.22);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed rgba(61, 42, 50, 0.2);
+  background: var(--panel2);
   padding: 10px;
   border-radius: 10px;
   color: var(--muted);
@@ -234,7 +260,7 @@ body {
 
 .exportSummary__item {
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--panel2);
   border-radius: 10px;
   padding: 10px;
   display: flex;
@@ -253,11 +279,12 @@ body {
 
 .mapWrap {
   position: relative;
-  background: rgba(255, 255, 255, 0.02);
+  background: #ffffff;
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
   min-height: 0;
+  box-shadow: 0 4px 24px var(--shadow);
 }
 
 #map {
@@ -272,11 +299,12 @@ body {
   bottom: 12px;
   padding: 8px 10px;
   border-radius: 10px;
-  background: rgba(15, 26, 46, 0.85);
+  background: rgba(255, 255, 255, 0.92);
   border: 1px solid var(--border);
   color: var(--muted);
   font-size: 12.5px;
   max-width: 70%;
+  box-shadow: 0 4px 16px var(--shadow);
 }
 
 @media (max-width: 980px) {
@@ -300,8 +328,25 @@ html.participant-token-ok #participantGate {
   display: none;
 }
 
+/* Participant welcome gate (index): show welcome after link is valid, before survey loads */
+html.participant-token-ok:not(.participant-welcome-ok) #welcomeGate {
+  display: flex;
+}
+
+html:not(.participant-token-ok) #welcomeGate {
+  display: none;
+}
+
+html.participant-welcome-ok #welcomeGate {
+  display: none;
+}
+
 /* Participant index only: hide main #app until ?participant=&token= are present */
 html:not(.participant-token-ok) body[data-survey-mode="participant"] #app {
+  display: none;
+}
+
+.participant-token-ok:not(.participant-welcome-ok) body[data-survey-mode="participant"] #app {
   display: none;
 }
 
@@ -313,7 +358,9 @@ html:not(.participant-token-ok) body[data-survey-mode="participant"] #app {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: var(--bg);
+  background: radial-gradient(1200px 700px at 20% 0%, rgba(201, 79, 124, 0.14), rgba(254, 245, 248, 0) 58%),
+    radial-gradient(900px 600px at 80% 100%, rgba(232, 160, 191, 0.2), rgba(254, 245, 248, 0) 55%),
+    var(--bg);
   box-sizing: border-box;
 }
 
@@ -322,12 +369,15 @@ html:not(.participant-token-ok) body[data-survey-mode="participant"] #app {
   padding: 24px;
   border-radius: 12px;
   border: 1px solid var(--border);
-  background: var(--panel);
+  background: linear-gradient(180deg, #ffffff, #fff8fb);
+  box-shadow: 0 16px 48px var(--shadow-strong);
 }
 
 .participantGate__h1 {
   margin: 0 0 12px;
-  font-size: 1.25rem;
+  font-size: 1.45rem;
+  line-height: 1.25;
+  letter-spacing: 0.2px;
 }
 
 .participantGate__p {
@@ -339,6 +389,23 @@ html:not(.participant-token-ok) body[data-survey-mode="participant"] #app {
 .participantGate__code {
   font-size: 0.85em;
   word-break: break-all;
+}
+
+.participantGate__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+/* Welcome page tweaks */
+.welcomeGate__card {
+  max-width: 720px;
+  padding: 28px;
+}
+
+.welcomeGate__p {
+  font-size: 14px;
+  line-height: 1.65;
 }
 
 /* Conductor main.html */
@@ -424,7 +491,8 @@ html:not(.participant-token-ok) body[data-survey-mode="participant"] #app {
   flex-shrink: 0;
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
-  background: rgba(15, 26, 46, 0.95);
+  background: linear-gradient(180deg, #ffffff, #fff5f9);
+  box-shadow: 0 4px 20px var(--shadow);
 }
 
 .conductorToolbar__row {
@@ -480,10 +548,10 @@ html:not(.participant-token-ok) body[data-survey-mode="participant"] #app {
 
 .participantPicker {
   display: grid;
-  grid-template-columns: 180px 1fr;
-  gap: 10px;
+  grid-template-columns: 140px 1fr;
+  gap: 8px 12px;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .participantPicker__label {
@@ -504,33 +572,62 @@ html:not(.participant-token-ok) body[data-survey-mode="participant"] #app {
 
 .participantPicker__input:focus {
   outline: none;
-  border-color: rgba(91, 188, 255, 0.7);
-  box-shadow: 0 0 0 3px rgba(91, 188, 255, 0.18);
+  border-color: rgba(201, 79, 124, 0.45);
+  box-shadow: 0 0 0 3px rgba(201, 79, 124, 0.12);
 }
 
-.participantPicker__select {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--panel2);
-  color: var(--text);
-  font: inherit;
-}
-
-.participantPicker__select:focus {
-  outline: none;
-  border-color: rgba(91, 188, 255, 0.7);
-  box-shadow: 0 0 0 3px rgba(91, 188, 255, 0.18);
+.participantPicker__hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .participantList {
   margin: 0;
   padding: 0;
   list-style: none;
-  max-height: 180px;
+  max-height: 260px;
   overflow: auto;
+}
+
+.participantList--with-delete li {
+  margin-bottom: 6px;
+}
+
+.participantRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.participantRow__select {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.participantRow__select:hover {
+  border-color: var(--accent);
+}
+
+.participantRow__select.is-active {
+  border-color: var(--accent2);
+  box-shadow: 0 0 0 1px var(--accent2);
+}
+
+.participantRow__delete {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
 }
 
 .participantList li {

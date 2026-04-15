@@ -46,13 +46,11 @@
             placeholder="Type to search (name, id)…"
             autocomplete="off"
           />
-
-          <label class="participantPicker__label" for="participantSelect">Select participant</label>
-          <select id="participantSelect" class="participantPicker__select">
-            <option value="" selected disabled>Select participant…</option>
-          </select>
+          <p class="participantPicker__hint">
+            Click a row to view on the map. Delete removes that participant permanently.
+          </p>
         </div>
-        <ul id="participantList" class="participantList is-hidden" aria-hidden="true"></ul>
+        <ul id="participantList" class="participantList participantList--with-delete" aria-label="Filtered participants"></ul>
       </div>
 
       <div id="app">

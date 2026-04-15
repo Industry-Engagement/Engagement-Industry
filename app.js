@@ -1180,6 +1180,21 @@ async function bootParticipant() {
     return;
   }
 
+  if (sessionStorage.getItem("participantWelcomeConfirmed") !== "1") {
+    const btn = document.getElementById("welcomeConfirmBtn");
+    if (btn && !btn.dataset.bound) {
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", () => {
+        sessionStorage.setItem("participantWelcomeConfirmed", "1");
+        document.documentElement.classList.add("participant-welcome-ok");
+        const gate = document.getElementById("welcomeGate");
+        if (gate) gate.style.display = "none";
+        void bootParticipant();
+      });
+    }
+    return;
+  }
+
   document.querySelector('[data-step="export"]')?.classList.add("is-hidden");
   document.querySelector('[data-step-panel="export"]')?.classList.add("is-hidden");
 
@@ -1240,23 +1255,75 @@ function matchesParticipantQuery(p, query) {
   return label.includes(q) || id.includes(q);
 }
 
-function populateParticipantSelect(select, list, currentId) {
-  select.innerHTML = "";
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.disabled = true;
-  placeholder.selected = !currentId;
-  placeholder.textContent = "Select participant…";
-  select.appendChild(placeholder);
+function renderFilteredParticipantList() {
+  const ul = document.getElementById("participantList");
+  const search = document.getElementById("participantSearch");
+  if (!ul) return;
+  const q = String(search?.value ?? "");
+  const filtered = conductorParticipantsCache.filter((p) => matchesParticipantQuery(p, q));
+  populateParticipantDeleteList(ul, filtered, viewingParticipantId);
+}
 
+function populateParticipantDeleteList(ul, list, currentId) {
+  ul.innerHTML = "";
   for (const p of list) {
-    const opt = document.createElement("option");
-    opt.value = p.id;
+    const li = document.createElement("li");
+    const row = document.createElement("div");
+    row.className = "participantRow";
+
+    const selectBtn = document.createElement("button");
+    selectBtn.type = "button";
+    selectBtn.className = "participantRow__select";
+    if (p.id === currentId) selectBtn.classList.add("is-active");
     const t = new Date(p.updatedAt);
-    opt.textContent = `${p.label} · ${t.toLocaleString()} · ${p.counts.locations} loc / ${p.counts.currentSegments + p.counts.ibxSegments} seg`;
-    if (p.id === currentId) opt.selected = true;
-    select.appendChild(opt);
+    selectBtn.textContent = `${p.label} · ${t.toLocaleString()} · ${p.counts.locations} loc / ${p.counts.currentSegments + p.counts.ibxSegments} seg`;
+    selectBtn.addEventListener("click", () => void selectConductorParticipant(p.id));
+
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "dangerBtn participantRow__delete";
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      void deleteConductorParticipant(p);
+    });
+
+    row.appendChild(selectBtn);
+    row.appendChild(delBtn);
+    li.appendChild(row);
+    ul.appendChild(li);
   }
+}
+
+async function deleteConductorParticipant(p) {
+  const label = String(p?.label ?? "this participant");
+  const ok = window.confirm(`Delete "${label}"?\n\nThis will permanently remove the participant and their survey data.`);
+  if (!ok) return;
+
+  const res = await fetch(`/api/conductor/participants/${encodeURIComponent(p.id)}`, {
+    method: "DELETE"
+  });
+  if (!res.ok) {
+    window.alert("Could not delete that participant.");
+    return;
+  }
+
+  if (viewingParticipantId === p.id) {
+    viewingParticipantId = null;
+    viewingParticipantLabel = "";
+    state.locations = [];
+    state.routes = {
+      current: { segments: [], totalCostGold: 0 },
+      ibx: { segments: [], totalCostGold: 0 }
+    };
+    rebuildFromState();
+    uiUpdateStats();
+    const lbl = document.getElementById("conductorViewingLabel");
+    if (lbl) lbl.textContent = "";
+  }
+
+  await refreshParticipantList();
 }
 
 /**
@@ -1313,43 +1380,24 @@ function alertConductorFailure(result) {
 }
 
 async function refreshParticipantList() {
-  const select = document.getElementById("participantSelect");
   const search = document.getElementById("participantSearch");
-  if (!select) return;
+  const ul = document.getElementById("participantList");
+  if (!ul) return;
   const res = await fetch("/api/conductor/participants");
   if (!res.ok) return;
   const list = await res.json();
   conductorParticipantsCache = Array.isArray(list) ? list : [];
 
-  const current = viewingParticipantId || String(select.value || "");
-  const q = String(search?.value ?? "");
-  const filtered = conductorParticipantsCache.filter((p) => matchesParticipantQuery(p, q));
-  populateParticipantSelect(select, filtered, current);
-
-  if (!select.dataset.bound) {
-    select.dataset.bound = "1";
-    select.addEventListener("change", () => {
-      const id = String(select.value || "");
-      if (!id) return;
-      void selectConductorParticipant(id);
-    });
-  }
+  renderFilteredParticipantList();
 
   if (search && !search.dataset.bound) {
     search.dataset.bound = "1";
-    search.addEventListener("input", () => {
-      const currentId = viewingParticipantId || String(select.value || "");
-      const query = String(search.value || "");
-      const f = conductorParticipantsCache.filter((p) => matchesParticipantQuery(p, query));
-      populateParticipantSelect(select, f, currentId);
-    });
+    search.addEventListener("input", () => renderFilteredParticipantList());
     search.addEventListener("keydown", (e) => {
       if (e.key !== "Enter") return;
-      const first = select.querySelector('option[value]:not([value=""]):not([disabled])');
-      if (first) {
-        select.value = first.value;
-        void selectConductorParticipant(first.value);
-      }
+      const query = String(search.value || "");
+      const filtered = conductorParticipantsCache.filter((p) => matchesParticipantQuery(p, query));
+      if (filtered.length > 0) void selectConductorParticipant(filtered[0].id);
     });
   }
 
@@ -1371,8 +1419,7 @@ async function selectConductorParticipant(id) {
   rebuildFromState();
   uiUpdateStats();
   document.getElementById("conductorViewingLabel").textContent = data.label;
-  const select = document.getElementById("participantSelect");
-  if (select && String(select.value || "") !== id) select.value = id;
+  renderFilteredParticipantList();
   setStep("locations");
 }
 
