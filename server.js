@@ -38,7 +38,13 @@ function randomToken() {
 
 function defaultSurveyJson() {
   return JSON.stringify({
-    industry: { companyName: "", roleKey: "", roleOtherDetail: "" },
+    industry: {
+      companyName: "",
+      roleKey: "",
+      roleOtherDetail: "",
+      goodsCategoryKeys: [],
+      goodsOtherDetail: ""
+    },
     locations: [],
     routes: {
       current: { segments: [], totalCostGold: 0 },

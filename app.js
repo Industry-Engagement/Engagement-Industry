@@ -46,6 +46,18 @@ const LOCATION_TYPES = {
   other: { label: "Other", color: "#c3a6ff" }
 };
 
+/** Participant industry questionnaire: multi-select goods / products (keys match checkbox values in sub.html). */
+const GOODS_CATEGORY_OPTIONS = [
+  { key: "recyclables", label: "Recyclables" },
+  { key: "food", label: "Food" },
+  { key: "construction", label: "Construction Materials" },
+  { key: "automotive", label: "Automotive Parts" },
+  { key: "light_fabrication", label: "Light Fabrication" },
+  { key: "high_tech", label: "High-tech Productions" },
+  { key: "other", label: "Others" }
+];
+const GOODS_CATEGORY_KEYS = new Set(GOODS_CATEGORY_OPTIONS.map((o) => o.key));
+
 function formatGold(n) {
   const rounded = Math.round((n + Number.EPSILON) * 100) / 100;
   return String(rounded);
@@ -280,11 +292,19 @@ const ui = {
     // Transfer costs are paid when a segment starts after a mode change.
     transferCostGoldPreview: 0,
     transferAppliedGoldPreview: false
-  }
+  },
+  /** Participant only: { type, latlng } before confirm (√); not persisted until committed. */
+  pendingLocation: null
 };
 
 const state = {
-  industry: { companyName: "", roleKey: "", roleOtherDetail: "" },
+  industry: {
+    companyName: "",
+    roleKey: "",
+    roleOtherDetail: "",
+    goodsCategoryKeys: [],
+    goodsOtherDetail: ""
+  },
   locations: [],
   routes: {
     current: { segments: [], totalCostGold: 0 },
@@ -343,6 +363,8 @@ function applySurveyPayload(parsed, options = {}) {
   const persist = options.persist !== false;
   if (!parsed || !parsed.locations || !parsed.routes) return;
 
+  clearPendingLocation();
+
   let didMigrate = false;
 
   const locRes = migrateLocationsFromParsed(parsed.locations);
@@ -367,10 +389,17 @@ function applySurveyPayload(parsed, options = {}) {
 
   state.ibxLine = parsed.ibxLine ?? { loaded: state.ibxLine?.loaded ?? false };
 
+  const rawGoods = parsed.industry?.goodsCategoryKeys;
+  const goodsCategoryKeys =
+    Array.isArray(rawGoods) && rawGoods.length > 0
+      ? [...new Set(rawGoods.filter((k) => GOODS_CATEGORY_KEYS.has(String(k))))]
+      : [];
   state.industry = {
     companyName: String(parsed.industry?.companyName ?? ""),
     roleKey: String(parsed.industry?.roleKey ?? ""),
-    roleOtherDetail: String(parsed.industry?.roleOtherDetail ?? "")
+    roleOtherDetail: String(parsed.industry?.roleOtherDetail ?? ""),
+    goodsCategoryKeys,
+    goodsOtherDetail: String(parsed.industry?.goodsOtherDetail ?? "")
   };
 
   if (didMigrate && persist) saveState();
@@ -440,6 +469,95 @@ function markerIcon(color) {
     iconSize: [14, 14],
     iconAnchor: [7, 7]
   });
+}
+
+function buildPendingLocationIconHtml(type) {
+  const meta = LOCATION_TYPES[type] ?? LOCATION_TYPES.other;
+  const c = meta.color;
+  return `<div class="locationPendingConfirm">
+  <div class="locationPendingConfirm__row">
+    <button type="button" class="locationPendingConfirm__btn" data-pending-loc="confirm" aria-label="Confirm location">√</button>
+    <button type="button" class="locationPendingConfirm__btn locationPendingConfirm__btn--cancel" data-pending-loc="cancel" aria-label="Choose again">×</button>
+  </div>
+  <div class="locationPendingConfirm__dot" style="background:${c}"></div>
+</div>`;
+}
+
+function clearPendingLocation() {
+  ui.pendingLocation = null;
+  if (layers?.pendingLocation) layers.pendingLocation.clearLayers();
+}
+
+function renderPendingLocationMarker() {
+  if (!layers?.pendingLocation || !map) return;
+  layers.pendingLocation.clearLayers();
+  if (!ui.pendingLocation) return;
+  const { type, latlng } = ui.pendingLocation;
+  const icon = L.divIcon({
+    className: "locationPendingConfirm-marker",
+    html: buildPendingLocationIconHtml(type),
+    iconSize: [52, 44],
+    iconAnchor: [26, 44]
+  });
+  const marker = L.marker(latlng, { icon, zIndexOffset: 800 });
+  marker.once("add", function onPendingAdd() {
+    let tries = 0;
+    const attach = () => {
+      const root = this.getElement?.();
+      if (!root && tries++ < 24) {
+        requestAnimationFrame(attach.bind(this));
+        return;
+      }
+      if (!root) return;
+      L.DomEvent.on(root, "mousedown", L.DomEvent.stopPropagation);
+      L.DomEvent.on(root, "click", L.DomEvent.stopPropagation);
+      L.DomEvent.on(root, "dblclick", L.DomEvent.stopPropagation);
+      const confirmBtn = root.querySelector('[data-pending-loc="confirm"]');
+      const cancelBtn = root.querySelector('[data-pending-loc="cancel"]');
+      if (confirmBtn) {
+        L.DomEvent.on(confirmBtn, "click", (e) => {
+          L.DomEvent.stopPropagation(e);
+          commitPendingLocation();
+        });
+      }
+      if (cancelBtn) {
+        L.DomEvent.on(cancelBtn, "click", (e) => {
+          L.DomEvent.stopPropagation(e);
+          cancelPendingLocation();
+        });
+      }
+    };
+    requestAnimationFrame(attach.bind(this));
+  });
+  marker.addTo(layers.pendingLocation);
+}
+
+function setPendingLocation(type, latlng) {
+  if (readOnly) return;
+  ui.pendingLocation = { type, latlng };
+  renderPendingLocationMarker();
+}
+
+function commitPendingLocation() {
+  if (!ui.pendingLocation || readOnly) return;
+  const { type, latlng } = ui.pendingLocation;
+  clearPendingLocation();
+  addLocation(type, latlng);
+}
+
+function cancelPendingLocation() {
+  clearPendingLocation();
+  const hintEl = document.getElementById("mapHint");
+  if (
+    hintEl &&
+    SURVEY_MODE === "participant" &&
+    ui.activeStep === "locations" &&
+    ui.locationType !== "none"
+  ) {
+    hintEl.textContent = `Placement: click the map to add a ${
+      LOCATION_TYPES[ui.locationType]?.label ?? ui.locationType
+    } point.`;
+  }
 }
 
 function getSegmentColor(section, seg) {
@@ -524,9 +642,11 @@ function uiUpdateStats() {
       const d = String(state.industry?.roleOtherDetail ?? "").trim();
       roleText = d ? `Others (${d})` : "Others";
     }
+    const goodsText = formatParticipantGoodsSummary(state.industry);
     let text = "";
     if (company) text = `Company / industry you entered: ${company}`;
     if (roleText) text = text ? `${text} · Role: ${roleText}` : `Role: ${roleText}`;
+    if (goodsText) text = text ? `${text} · Goods/products: ${goodsText}` : `Goods/products: ${goodsText}`;
     indEl.textContent = text;
     indEl.classList.toggle("is-hidden", !text);
   }
@@ -543,7 +663,9 @@ function uiUpdateStats() {
       const d = String(state.industry?.roleOtherDetail ?? "").trim();
       roleSuffix = d ? ` · Others (${d})` : " · Others";
     }
-    condInd.textContent = c ? `Industry / company: ${c}${roleSuffix}` : "";
+    const goodsSuffix = formatParticipantGoodsSummary(state.industry);
+    const goodsPart = goodsSuffix ? ` · Goods: ${goodsSuffix}` : "";
+    condInd.textContent = c ? `Industry / company: ${c}${roleSuffix}${goodsPart}` : "";
     condInd.classList.toggle("is-hidden", !c || !viewingParticipantId);
   }
 
@@ -554,7 +676,8 @@ function shouldShowParticipantCompanyBanner() {
   const hasWorkplace = state.locations.some((l) => l.locationType === "workplace");
   const mapGatesOpen = Boolean(
     document.getElementById("industryGate")?.classList.contains("is-open") ||
-      document.getElementById("roleGate")?.classList.contains("is-open")
+      document.getElementById("roleGate")?.classList.contains("is-open") ||
+      document.getElementById("goodsGate")?.classList.contains("is-open")
   );
   return (
     SURVEY_MODE === "participant" &&
@@ -629,6 +752,8 @@ function setStep(step) {
 
   updateParticipantCompanyBanner();
 
+  if (step !== "locations") clearPendingLocation();
+
   // Conductor review UX: show only the relevant layer(s) for the selected step.
   if (!map) return;
   if (layers?.locations) {
@@ -636,6 +761,14 @@ function setStep(step) {
       if (!map.hasLayer(layers.locations)) layers.locations.addTo(map);
     } else if (map.hasLayer(layers.locations)) {
       layers.locations.removeFrom(map);
+    }
+  }
+
+  if (layers?.pendingLocation) {
+    if (step === "locations") {
+      if (!map.hasLayer(layers.pendingLocation)) layers.pendingLocation.addTo(map);
+    } else if (map.hasLayer(layers.pendingLocation)) {
+      layers.pendingLocation.removeFrom(map);
     }
   }
 
@@ -667,6 +800,7 @@ function setStep(step) {
 
 function startSegment(section) {
   if (readOnly) return;
+  clearPendingLocation();
   if (ui.drawing.active) return;
   const modeUIKey = section === "current" ? ui.activeRouteModeCurrent : ui.activeRouteModeIbx;
   const modeBaseKey = modeKeyFromUI(modeUIKey);
@@ -852,17 +986,24 @@ function addLocation(type, latlng) {
   uiUpdateStats();
   if (SURVEY_MODE === "participant" && type === "workplace") {
     maybeOpenParticipantRoleGate();
+    if (!participantNeedsRoleGate()) maybeOpenParticipantGoodsGate();
   }
 }
 
 function clearLocations() {
   if (readOnly) return;
+  clearPendingLocation();
   state.locations = [];
   state.industry = {
     ...state.industry,
     roleKey: "",
-    roleOtherDetail: ""
+    roleOtherDetail: "",
+    goodsCategoryKeys: [],
+    goodsOtherDetail: ""
   };
+  document.getElementById("roleGate")?.classList.remove("is-open");
+  document.getElementById("goodsGate")?.classList.remove("is-open");
+  syncParticipantMapGateOverlay();
   layers.locations.clearLayers();
   saveState();
   uiUpdateStats();
@@ -988,6 +1129,10 @@ function exportAllDataCSVFromState(stateObj, participantMeta = null) {
   const industryCo = String(stateObj.industry?.companyName ?? "");
   const industryRole = String(stateObj.industry?.roleKey ?? "");
   const industryRoleDetail = String(stateObj.industry?.roleOtherDetail ?? "");
+  const industryGoodsKeys = Array.isArray(stateObj.industry?.goodsCategoryKeys)
+    ? stateObj.industry.goodsCategoryKeys.join("|")
+    : "";
+  const industryGoodsOther = String(stateObj.industry?.goodsOtherDetail ?? "");
   const baseHeader = [
     "record_type",
     "section",
@@ -1007,11 +1152,22 @@ function exportAllDataCSVFromState(stateObj, participantMeta = null) {
   ];
   rows.push(
     withP
-      ? ["participant_id", "participant_label", "industry_company", "industry_role", "industry_role_detail", ...baseHeader]
+      ? [
+          "participant_id",
+          "participant_label",
+          "industry_company",
+          "industry_role",
+          "industry_role_detail",
+          "industry_goods_keys",
+          "industry_goods_other",
+          ...baseHeader
+        ]
       : baseHeader
   );
 
-  const rowPrefix = withP ? [pid, plab, industryCo, industryRole, industryRoleDetail] : [];
+  const rowPrefix = withP
+    ? [pid, plab, industryCo, industryRole, industryRoleDetail, industryGoodsKeys, industryGoodsOther]
+    : [];
 
   for (const loc of stateObj.locations) {
     const has2263 = typeof loc.x === "number" && typeof loc.y === "number";
@@ -1144,7 +1300,7 @@ async function exportAllParticipantsCSV() {
   }
   const list = await res.json();
   const headerRow =
-    "participant_id,participant_label,industry_company,industry_role,industry_role_detail,record_type,section,location_type,id,x_2263,y_2263,lat,lng,route_mode,route_mode_key,length_miles,transfer_applied_gold,transfer_cost_gold,segment_cost_gold,section_total_cost_gold_after";
+    "participant_id,participant_label,industry_company,industry_role,industry_role_detail,industry_goods_keys,industry_goods_other,record_type,section,location_type,id,x_2263,y_2263,lat,lng,route_mode,route_mode_key,length_miles,transfer_applied_gold,transfer_cost_gold,segment_cost_gold,section_total_cost_gold_after";
   const chunks = [headerRow];
   for (const p of list) {
     const r = await fetch(`/api/conductor/participants/${encodeURIComponent(p.id)}`);
@@ -1223,6 +1379,7 @@ function setupUI() {
   // Location mode buttons
   document.querySelectorAll("[data-location-type]").forEach((btn) => {
     btn.addEventListener("click", () => {
+      if (SURVEY_MODE === "participant") clearPendingLocation();
       ui.locationType = btn.dataset.locationType;
       document.getElementById("mapHint").textContent =
         ui.locationType === "none"
@@ -1273,6 +1430,7 @@ function setupMap() {
 
   layers = {
     locations: L.layerGroup(),
+    pendingLocation: L.layerGroup(),
     currentRoutes: L.layerGroup(),
     ibxLine: L.layerGroup(),
     ibxStations: L.layerGroup(),
@@ -1280,6 +1438,7 @@ function setupMap() {
   };
 
   layers.locations.addTo(map);
+  layers.pendingLocation.addTo(map);
   layers.currentRoutes.addTo(map);
   layers.ibxRoutes.addTo(map);
   // ibxLine is only shown when user enters Step 3 (handled in setStep()).
@@ -1294,7 +1453,17 @@ function setupMap() {
       return;
     }
 
-    if (ui.locationType !== "none") addLocation(ui.locationType, e.latlng);
+    if (ui.locationType !== "none") {
+      if (
+        SURVEY_MODE === "participant" &&
+        !readOnly &&
+        ui.activeStep === "locations"
+      ) {
+        setPendingLocation(ui.locationType, e.latlng);
+      } else {
+        addLocation(ui.locationType, e.latlng);
+      }
+    }
   });
 
   const mapContainer = map.getContainer();
@@ -1344,8 +1513,9 @@ function syncParticipantMapGateOverlay() {
   if (!mapWrap) return;
   const ind = document.getElementById("industryGate");
   const role = document.getElementById("roleGate");
+  const goods = document.getElementById("goodsGate");
   const anyOpen = Boolean(
-    ind?.classList.contains("is-open") || role?.classList.contains("is-open")
+    ind?.classList.contains("is-open") || role?.classList.contains("is-open") || goods?.classList.contains("is-open")
   );
   mapWrap.classList.toggle("map-gate-open", anyOpen);
   if (anyOpen) document.body.dataset.mapGateOpen = "1";
@@ -1372,6 +1542,43 @@ function participantNeedsRoleGate() {
     participantHasWorkplaceLocation() &&
     !participantIndustryRoleIsComplete()
   );
+}
+
+function participantGoodsIsComplete() {
+  const keys = state.industry?.goodsCategoryKeys;
+  if (!Array.isArray(keys) || keys.length === 0) return false;
+  if (keys.includes("other")) {
+    return String(state.industry?.goodsOtherDetail ?? "").trim().length > 0;
+  }
+  return true;
+}
+
+function participantNeedsGoodsGate() {
+  return (
+    SURVEY_MODE === "participant" &&
+    participantHasWorkplaceLocation() &&
+    participantIndustryRoleIsComplete() &&
+    !participantGoodsIsComplete()
+  );
+}
+
+function formatParticipantGoodsSummary(industry) {
+  const ind = industry ?? state.industry;
+  if (!ind) return "";
+  const keys = ind.goodsCategoryKeys;
+  if (!Array.isArray(keys) || keys.length === 0) return "";
+  const parts = [];
+  for (const k of keys) {
+    const opt = GOODS_CATEGORY_OPTIONS.find((o) => o.key === k);
+    if (!opt) continue;
+    if (k === "other") {
+      const d = String(ind.goodsOtherDetail ?? "").trim();
+      parts.push(d ? `Others (${d})` : "Others");
+    } else {
+      parts.push(opt.label);
+    }
+  }
+  return parts.join("; ");
 }
 
 function openParticipantRoleGate() {
@@ -1451,11 +1658,97 @@ function initParticipantRoleGateOnce() {
       requestAnimationFrame(() => map.invalidateSize());
       setTimeout(() => map.invalidateSize(), 200);
     }
+    maybeOpenParticipantGoodsGate();
   });
 }
 
 function maybeOpenParticipantRoleGate() {
   if (participantNeedsRoleGate()) openParticipantRoleGate();
+}
+
+function openParticipantGoodsGate() {
+  const gate = document.getElementById("goodsGate");
+  if (!gate) return;
+  gate.classList.add("is-open");
+  syncParticipantMapGateOverlay();
+
+  const otherWrap = document.getElementById("goodsOtherWrap");
+  const otherInput = document.getElementById("goodsOtherInput");
+  const keys = new Set(state.industry?.goodsCategoryKeys ?? []);
+
+  document.querySelectorAll('input[name="participantGoods"]').forEach((cb) => {
+    cb.checked = keys.has(cb.value);
+  });
+
+  const showOther = keys.has("other");
+  otherWrap?.classList.toggle("is-hidden", !showOther);
+  if (otherInput) otherInput.value = String(state.industry?.goodsOtherDetail ?? "");
+
+  requestAnimationFrame(() => {
+    document.querySelector('input[name="participantGoods"]')?.focus();
+  });
+}
+
+function initParticipantGoodsGateOnce() {
+  if (SURVEY_MODE !== "participant" || document.body.dataset.participantGoodsGateBound === "1") return;
+  const gate = document.getElementById("goodsGate");
+  if (!gate) return;
+  document.body.dataset.participantGoodsGateBound = "1";
+
+  const btn = document.getElementById("goodsContinueBtn");
+  const otherWrap = document.getElementById("goodsOtherWrap");
+  const otherInput = document.getElementById("goodsOtherInput");
+
+  document.querySelectorAll('input[name="participantGoods"]').forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const anyOther = Array.from(document.querySelectorAll('input[name="participantGoods"]')).some(
+        (x) => x.value === "other" && x.checked
+      );
+      otherWrap?.classList.toggle("is-hidden", !anyOther);
+      if (anyOther) otherInput?.focus();
+    });
+  });
+
+  otherInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") btn?.click();
+  });
+
+  btn?.addEventListener("click", () => {
+    const selected = Array.from(document.querySelectorAll('input[name="participantGoods"]:checked')).map(
+      (el) => el.value
+    );
+    if (selected.length === 0) {
+      window.alert("Please select at least one option.");
+      return;
+    }
+    let otherDetail = "";
+    if (selected.includes("other")) {
+      otherDetail = String(otherInput?.value ?? "").trim();
+      if (!otherDetail) {
+        window.alert("Please describe the goods or products for “Others”.");
+        return;
+      }
+    }
+    const goodsCategoryKeys = [...new Set(selected.filter((k) => GOODS_CATEGORY_KEYS.has(k)))];
+    state.industry = {
+      ...state.industry,
+      goodsCategoryKeys,
+      goodsOtherDetail: goodsCategoryKeys.includes("other") ? otherDetail : ""
+    };
+    gate.classList.remove("is-open");
+    syncParticipantMapGateOverlay();
+    void flushSaveToServer();
+    rebuildFromState();
+    uiUpdateStats();
+    if (map) {
+      requestAnimationFrame(() => map.invalidateSize());
+      setTimeout(() => map.invalidateSize(), 200);
+    }
+  });
+}
+
+function maybeOpenParticipantGoodsGate() {
+  if (participantNeedsGoodsGate()) openParticipantGoodsGate();
 }
 
 async function finishParticipantBoot() {
@@ -1472,6 +1765,7 @@ async function finishParticipantBoot() {
   uiUpdateStats();
   setParticipantMapHintAfterIndustryGate();
   initParticipantRoleGateOnce();
+  initParticipantGoodsGateOnce();
 
   if (!document.body.dataset.participantPagehideBound) {
     document.body.dataset.participantPagehideBound = "1";
@@ -1586,6 +1880,8 @@ async function bootParticipant() {
 
   if (participantNeedsRoleGate()) {
     openParticipantRoleGate();
+  } else if (participantNeedsGoodsGate()) {
+    openParticipantGoodsGate();
   }
 }
 
@@ -1659,7 +1955,13 @@ async function deleteConductorParticipant(p) {
   if (viewingParticipantId === p.id) {
     viewingParticipantId = null;
     viewingParticipantLabel = "";
-    state.industry = { companyName: "", roleKey: "", roleOtherDetail: "" };
+    state.industry = {
+      companyName: "",
+      roleKey: "",
+      roleOtherDetail: "",
+      goodsCategoryKeys: [],
+      goodsOtherDetail: ""
+    };
     state.locations = [];
     state.routes = {
       current: { segments: [], totalCostGold: 0 },

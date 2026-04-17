@@ -413,6 +413,66 @@
             </div>
           </div>
 
+          <div
+            id="goodsGate"
+            class="goodsGate goodsGate--floating"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="goodsGateTitle"
+          >
+            <div class="participantGate__card goodsGate__card">
+              <h2 class="goodsGate__title" id="goodsGateTitle">
+                What kind of goods or products do you produce or distribute?
+              </h2>
+              <p class="participantGate__p goodsGate__intro">Select all that apply.</p>
+              <fieldset class="goodsGate__fieldset">
+                <legend class="goodsGate__legend">Goods or products</legend>
+                <label class="goodsGate__option">
+                  <input type="checkbox" name="participantGoods" value="recyclables" />
+                  Recyclables
+                </label>
+                <label class="goodsGate__option">
+                  <input type="checkbox" name="participantGoods" value="food" />
+                  Food
+                </label>
+                <label class="goodsGate__option">
+                  <input type="checkbox" name="participantGoods" value="construction" />
+                  Construction Materials
+                </label>
+                <label class="goodsGate__option">
+                  <input type="checkbox" name="participantGoods" value="automotive" />
+                  Automotive Parts
+                </label>
+                <label class="goodsGate__option">
+                  <input type="checkbox" name="participantGoods" value="light_fabrication" />
+                  Light Fabrication
+                </label>
+                <label class="goodsGate__option">
+                  <input type="checkbox" name="participantGoods" value="high_tech" />
+                  High-tech Productions
+                </label>
+                <label class="goodsGate__option">
+                  <input type="checkbox" name="participantGoods" value="other" />
+                  Others
+                </label>
+              </fieldset>
+              <div id="goodsOtherWrap" class="goodsOtherWrap is-hidden">
+                <label class="goodsGate__label" for="goodsOtherInput">Please specify</label>
+                <input
+                  id="goodsOtherInput"
+                  class="goodsGate__input"
+                  type="text"
+                  maxlength="300"
+                  autocomplete="off"
+                  placeholder="Describe the goods or products"
+                />
+              </div>
+              <div class="participantGate__actions">
+                <button class="primaryBtn" id="goodsContinueBtn" type="button">Continue</button>
+              </div>
+            </div>
+          </div>
+
           <div id="map"></div>
           <div class="mapHint" id="mapHint">
             Select a tool on the left, then click the map to add points or draw
