@@ -309,6 +309,10 @@ body {
   box-sizing: border-box;
 }
 
+.mapCompanyHint--rawOrigin {
+  border-color: rgba(20, 184, 166, 0.42);
+}
+
 /* Participant: confirm / cancel before a location is saved (√ / × above the pin) */
 .leaflet-div-icon.locationPendingConfirm-marker {
   background: transparent !important;
@@ -448,12 +452,16 @@ html.participant-welcome-ok #welcomeGate {
 
 #industryGate.industryGate--floating.is-open,
 #roleGate.roleGate--floating.is-open,
-#goodsGate.goodsGate--floating.is-open {
+#goodsGate.goodsGate--floating.is-open,
+#rawMaterialsGate.rawMaterialsGate--floating.is-open,
+#rawMaterialOriginGate.rawMaterialOriginGate--floating.is-open {
   display: flex;
 }
 
 #roleGate.roleGate--floating,
-#goodsGate.goodsGate--floating {
+#goodsGate.goodsGate--floating,
+#rawMaterialsGate.rawMaterialsGate--floating,
+#rawMaterialOriginGate.rawMaterialOriginGate--floating {
   display: none;
   position: absolute;
   inset: 0;
@@ -468,7 +476,9 @@ html.participant-welcome-ok #welcomeGate {
 
 #industryGate.industryGate--floating .industryGate__card,
 #roleGate.roleGate--floating .roleGate__card,
-#goodsGate.goodsGate--floating .goodsGate__card {
+#goodsGate.goodsGate--floating .goodsGate__card,
+#rawMaterialsGate.rawMaterialsGate--floating .rawMaterialsGate__card,
+#rawMaterialOriginGate.rawMaterialOriginGate--floating .rawMaterialOriginGate__card {
   max-width: 420px;
   width: 100%;
   padding: 18px 20px;
@@ -674,6 +684,69 @@ html.participant-welcome-ok #welcomeGate {
   outline: none;
   border-color: rgba(201, 79, 124, 0.55);
   box-shadow: 0 0 0 3px rgba(201, 79, 124, 0.15);
+}
+
+.rawMaterialsGate__title {
+  margin: 0 0 8px;
+  font-size: 1.08rem;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+.rawMaterialsGate__intro {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.rawMaterialsList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+  max-height: min(52vh, 360px);
+  overflow-y: auto;
+}
+
+.rawMaterialsRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rawMaterialsRow .goodsGate__input {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0;
+}
+
+.rawMaterialsRow__remove {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.rawMaterialsAddBtn {
+  margin-bottom: 8px;
+}
+
+.rawMaterialOriginGate__title {
+  margin: 0 0 8px;
+  font-size: 1.08rem;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+.rawMaterialOriginGate__intro {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 12px;
+  color: var(--muted);
 }
 
 /* Participant index only: hide main #app until ?participant=&token= are present */

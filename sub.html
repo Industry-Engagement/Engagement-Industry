@@ -340,6 +340,12 @@
           </div>
 
           <div
+            id="participantRawMaterialOriginBanner"
+            class="mapCompanyHint mapCompanyHint--rawOrigin is-hidden"
+            aria-hidden="true"
+          ></div>
+
+          <div
             id="industryGate"
             class="industryGate industryGate--floating"
             role="dialog"
@@ -469,6 +475,82 @@
               </div>
               <div class="participantGate__actions">
                 <button class="primaryBtn" id="goodsContinueBtn" type="button">Continue</button>
+              </div>
+            </div>
+          </div>
+
+          <div
+            id="rawMaterialsGate"
+            class="rawMaterialsGate rawMaterialsGate--floating"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rawMaterialsGateTitle"
+          >
+            <div class="participantGate__card rawMaterialsGate__card">
+              <h2 class="rawMaterialsGate__title" id="rawMaterialsGateTitle">
+                What are your raw materials for the production?
+              </h2>
+              <p class="participantGate__p rawMaterialsGate__intro">
+                Enter each raw material in its own field. Add more fields if you need them.
+              </p>
+              <div id="rawMaterialsList" class="rawMaterialsList" role="list"></div>
+              <button type="button" class="ghostBtn rawMaterialsAddBtn" id="rawMaterialsAddBtn">
+                + Add another
+              </button>
+              <div class="participantGate__actions">
+                <button class="primaryBtn" id="rawMaterialsContinueBtn" type="button">Continue</button>
+              </div>
+            </div>
+          </div>
+
+          <div
+            id="rawMaterialOriginGate"
+            class="rawMaterialOriginGate rawMaterialOriginGate--floating"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rawMaterialOriginGateTitle"
+          >
+            <div class="participantGate__card rawMaterialOriginGate__card">
+              <h2 class="rawMaterialOriginGate__title" id="rawMaterialOriginGateTitle">Where does it originate?</h2>
+              <p class="participantGate__p rawMaterialOriginGate__intro" id="rawMaterialOriginGateIntro">
+                Choose the option that best applies.
+              </p>
+              <fieldset class="goodsGate__fieldset">
+                <legend class="goodsGate__legend">Origin</legend>
+                <label class="goodsGate__option">
+                  <input type="radio" name="rawMaterialOriginChoice" value="storage_facility" />
+                  Storage Facility
+                </label>
+                <label class="goodsGate__option">
+                  <input type="radio" name="rawMaterialOriginChoice" value="distribution_center" />
+                  Distribution center
+                </label>
+                <label class="goodsGate__option">
+                  <input type="radio" name="rawMaterialOriginChoice" value="manufacturing_facility" />
+                  Manufacturing Facility
+                </label>
+                <label class="goodsGate__option">
+                  <input type="radio" name="rawMaterialOriginChoice" value="airport" />
+                  Airport
+                </label>
+                <label class="goodsGate__option">
+                  <input type="radio" name="rawMaterialOriginChoice" value="other" />
+                  Others
+                </label>
+              </fieldset>
+              <div id="rawMaterialOriginOtherWrap" class="goodsOtherWrap is-hidden">
+                <label class="goodsGate__label" for="rawMaterialOriginOtherInput">Please specify</label>
+                <input
+                  id="rawMaterialOriginOtherInput"
+                  class="goodsGate__input"
+                  type="text"
+                  maxlength="300"
+                  autocomplete="off"
+                  placeholder="Describe the origin"
+                />
+              </div>
+              <div class="participantGate__actions">
+                <button class="primaryBtn" id="rawMaterialOriginContinueBtn" type="button">Continue</button>
               </div>
             </div>
           </div>

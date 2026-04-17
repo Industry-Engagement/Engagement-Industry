@@ -18,6 +18,7 @@ let viewingParticipantLabel = "";
 
 /** Participant map only: short company-location hint follows pointer while over the map. */
 let companyBannerPointerOnMap = false;
+let rawMaterialOriginBannerPointerOnMap = false;
 
 const COST_PER_MILE_GOLD = {
   huge: 1.0,
@@ -57,6 +58,70 @@ const GOODS_CATEGORY_OPTIONS = [
   { key: "other", label: "Others" }
 ];
 const GOODS_CATEGORY_KEYS = new Set(GOODS_CATEGORY_OPTIONS.map((o) => o.key));
+
+/** Per raw material: first branch — where it originates (keys match sub.html radios). */
+const RAW_MATERIAL_ORIGIN_OPTIONS = [
+  { key: "storage_facility", label: "Storage Facility" },
+  { key: "distribution_center", label: "Distribution center" },
+  { key: "manufacturing_facility", label: "Manufacturing Facility" },
+  { key: "airport", label: "Airport" },
+  { key: "other", label: "Others" }
+];
+const RAW_MATERIAL_ORIGIN_KEYS = new Set(RAW_MATERIAL_ORIGIN_OPTIONS.map((o) => o.key));
+
+function normalizeRawMaterialsFromPayload(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((s) => String(s ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 40);
+}
+
+function normalizeRawMaterialBranchesFromPayload(rawMaterials, branchesIn) {
+  const n = rawMaterials.length;
+  const arr = Array.isArray(branchesIn) ? branchesIn : [];
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const b = arr[i] || {};
+    const key = String(b.originCategoryKey ?? "").trim();
+    const originCategoryKey = RAW_MATERIAL_ORIGIN_KEYS.has(key) ? key : "";
+    const ox = b.originX;
+    const oy = b.originY;
+    out.push({
+      originCategoryKey,
+      originOtherDetail: String(b.originOtherDetail ?? ""),
+      originX: typeof ox === "number" && Number.isFinite(ox) ? ox : null,
+      originY: typeof oy === "number" && Number.isFinite(oy) ? oy : null
+    });
+  }
+  return out;
+}
+
+function ensureRawMaterialBranchesAligned() {
+  const mats = state.industry.rawMaterials ?? [];
+  let branches = state.industry.rawMaterialBranches;
+  if (!Array.isArray(branches)) branches = [];
+  const next = [];
+  for (let i = 0; i < mats.length; i++) {
+    const prev = branches[i];
+    if (prev && typeof prev === "object") {
+      next.push({
+        originCategoryKey: String(prev.originCategoryKey ?? ""),
+        originOtherDetail: String(prev.originOtherDetail ?? ""),
+        originX: typeof prev.originX === "number" && Number.isFinite(prev.originX) ? prev.originX : null,
+        originY: typeof prev.originY === "number" && Number.isFinite(prev.originY) ? prev.originY : null
+      });
+    } else {
+      next.push({
+        originCategoryKey: "",
+        originOtherDetail: "",
+        originX: null,
+        originY: null
+      });
+    }
+  }
+  state.industry.rawMaterialBranches = next;
+}
 
 function formatGold(n) {
   const rounded = Math.round((n + Number.EPSILON) * 100) / 100;
@@ -294,7 +359,11 @@ const ui = {
     transferAppliedGoldPreview: false
   },
   /** Participant only: { type, latlng } before confirm (√); not persisted until committed. */
-  pendingLocation: null
+  pendingLocation: null,
+  /** Participant: map phase — place originating location for rawMaterials[materialIndex]. */
+  rawMaterialBranchMap: null,
+  /** Participant: which material index the origin dialog is editing. */
+  rawMaterialOriginEditingIndex: null
 };
 
 const state = {
@@ -303,7 +372,9 @@ const state = {
     roleKey: "",
     roleOtherDetail: "",
     goodsCategoryKeys: [],
-    goodsOtherDetail: ""
+    goodsOtherDetail: "",
+    rawMaterials: [],
+    rawMaterialBranches: []
   },
   locations: [],
   routes: {
@@ -394,12 +465,20 @@ function applySurveyPayload(parsed, options = {}) {
     Array.isArray(rawGoods) && rawGoods.length > 0
       ? [...new Set(rawGoods.filter((k) => GOODS_CATEGORY_KEYS.has(String(k))))]
       : [];
+  const rawMats = parsed.industry?.rawMaterials;
+  const rawMaterials = normalizeRawMaterialsFromPayload(rawMats);
+  const rawMaterialBranches = normalizeRawMaterialBranchesFromPayload(
+    rawMaterials,
+    parsed.industry?.rawMaterialBranches
+  );
   state.industry = {
     companyName: String(parsed.industry?.companyName ?? ""),
     roleKey: String(parsed.industry?.roleKey ?? ""),
     roleOtherDetail: String(parsed.industry?.roleOtherDetail ?? ""),
     goodsCategoryKeys,
-    goodsOtherDetail: String(parsed.industry?.goodsOtherDetail ?? "")
+    goodsOtherDetail: String(parsed.industry?.goodsOtherDetail ?? ""),
+    rawMaterials,
+    rawMaterialBranches
   };
 
   if (didMigrate && persist) saveState();
@@ -471,16 +550,22 @@ function markerIcon(color) {
   });
 }
 
-function buildPendingLocationIconHtml(type) {
-  const meta = LOCATION_TYPES[type] ?? LOCATION_TYPES.other;
-  const c = meta.color;
+function buildPendingLocationConfirmIconHtml(dotColor) {
   return `<div class="locationPendingConfirm">
   <div class="locationPendingConfirm__row">
     <button type="button" class="locationPendingConfirm__btn" data-pending-loc="confirm" aria-label="Confirm location">√</button>
     <button type="button" class="locationPendingConfirm__btn locationPendingConfirm__btn--cancel" data-pending-loc="cancel" aria-label="Choose again">×</button>
   </div>
-  <div class="locationPendingConfirm__dot" style="background:${c}"></div>
+  <div class="locationPendingConfirm__dot" style="background:${dotColor}"></div>
 </div>`;
+}
+
+function pendingLocationDotColor(pending) {
+  if (!pending) return LOCATION_TYPES.other.color;
+  if (pending.kind === "rawMaterialOrigin") return "#14b8a6";
+  const t = pending.type ?? "other";
+  const meta = LOCATION_TYPES[t] ?? LOCATION_TYPES.other;
+  return meta.color;
 }
 
 function clearPendingLocation() {
@@ -492,10 +577,11 @@ function renderPendingLocationMarker() {
   if (!layers?.pendingLocation || !map) return;
   layers.pendingLocation.clearLayers();
   if (!ui.pendingLocation) return;
-  const { type, latlng } = ui.pendingLocation;
+  const { latlng } = ui.pendingLocation;
+  const dotColor = pendingLocationDotColor(ui.pendingLocation);
   const icon = L.divIcon({
     className: "locationPendingConfirm-marker",
-    html: buildPendingLocationIconHtml(type),
+    html: buildPendingLocationConfirmIconHtml(dotColor),
     iconSize: [52, 44],
     iconAnchor: [26, 44]
   });
@@ -534,13 +620,45 @@ function renderPendingLocationMarker() {
 
 function setPendingLocation(type, latlng) {
   if (readOnly) return;
-  ui.pendingLocation = { type, latlng };
+  ui.pendingLocation = { kind: "surveyLocation", type, latlng };
+  renderPendingLocationMarker();
+}
+
+function setPendingRawMaterialOrigin(materialIndex, latlng) {
+  if (readOnly) return;
+  ui.pendingLocation = { kind: "rawMaterialOrigin", materialIndex, latlng };
   renderPendingLocationMarker();
 }
 
 function commitPendingLocation() {
   if (!ui.pendingLocation || readOnly) return;
-  const { type, latlng } = ui.pendingLocation;
+  const p = ui.pendingLocation;
+  if (p.kind === "rawMaterialOrigin") {
+    const { materialIndex, latlng } = p;
+    clearPendingLocation();
+    const [x, y] = gpsToEPSG2263(latlng.lng, latlng.lat);
+    ensureRawMaterialBranchesAligned();
+    const row = state.industry.rawMaterialBranches[materialIndex] ?? {
+      originCategoryKey: "",
+      originOtherDetail: "",
+      originX: null,
+      originY: null
+    };
+    state.industry.rawMaterialBranches[materialIndex] = {
+      ...row,
+      originX: x,
+      originY: y
+    };
+    ui.rawMaterialBranchMap = null;
+    void flushSaveToServer();
+    rebuildFromState();
+    uiUpdateStats();
+    setParticipantMapHintAfterIndustryGate();
+    advanceAfterRawMaterialOriginPlaced(materialIndex);
+    return;
+  }
+  const type = p.type;
+  const latlng = p.latlng;
   clearPendingLocation();
   addLocation(type, latlng);
 }
@@ -548,12 +666,12 @@ function commitPendingLocation() {
 function cancelPendingLocation() {
   clearPendingLocation();
   const hintEl = document.getElementById("mapHint");
-  if (
-    hintEl &&
-    SURVEY_MODE === "participant" &&
-    ui.activeStep === "locations" &&
-    ui.locationType !== "none"
-  ) {
+  if (!hintEl || SURVEY_MODE !== "participant" || ui.activeStep !== "locations") return;
+  if (ui.rawMaterialBranchMap !== null) {
+    setParticipantMapHintAfterIndustryGate();
+    return;
+  }
+  if (ui.locationType !== "none") {
     hintEl.textContent = `Placement: click the map to add a ${
       LOCATION_TYPES[ui.locationType]?.label ?? ui.locationType
     } point.`;
@@ -601,6 +719,27 @@ function rebuildFromState() {
     layers.locations.addLayer(marker);
   }
 
+  const rmats = state.industry?.rawMaterials ?? [];
+  const rbr = state.industry?.rawMaterialBranches ?? [];
+  for (let i = 0; i < rbr.length; i++) {
+    const b = rbr[i];
+    if (typeof b?.originX !== "number" || typeof b?.originY !== "number") continue;
+    const latlng = epsg2263XYToLatLng(b.originX, b.originY);
+    const matLabel = String(rmats[i] ?? "").trim() || `Material ${i + 1}`;
+    const originOpt = RAW_MATERIAL_ORIGIN_OPTIONS.find((o) => o.key === b.originCategoryKey);
+    let originDesc = "—";
+    if (originOpt) originDesc = originOpt.label;
+    else if (b.originCategoryKey === "other") {
+      const d = String(b.originOtherDetail ?? "").trim();
+      originDesc = d ? `Others (${d})` : "Others";
+    }
+    const mk = L.marker(latlng, { icon: markerIcon("#14b8a6"), draggable: false });
+    mk.bindPopup(
+      `Raw material origin<br/>${escapeHtml(matLabel)}<br/>Where it originates: ${escapeHtml(originDesc)}`
+    );
+    layers.locations.addLayer(mk);
+  }
+
   for (const seg of state.routes.current.segments) {
     const latlngs = surveyPointsToLatLngs(seg.points);
     const line = L.polyline(latlngs, createModePolylineStyle(getSegmentColor("current", seg), false));
@@ -643,10 +782,14 @@ function uiUpdateStats() {
       roleText = d ? `Others (${d})` : "Others";
     }
     const goodsText = formatParticipantGoodsSummary(state.industry);
+    const rawMatText = formatParticipantRawMaterialsSummary(state.industry);
     let text = "";
     if (company) text = `Company / industry you entered: ${company}`;
     if (roleText) text = text ? `${text} · Role: ${roleText}` : `Role: ${roleText}`;
     if (goodsText) text = text ? `${text} · Goods/products: ${goodsText}` : `Goods/products: ${goodsText}`;
+    if (rawMatText) {
+      text = text ? `${text} · Raw materials: ${rawMatText}` : `Raw materials: ${rawMatText}`;
+    }
     indEl.textContent = text;
     indEl.classList.toggle("is-hidden", !text);
   }
@@ -665,11 +808,14 @@ function uiUpdateStats() {
     }
     const goodsSuffix = formatParticipantGoodsSummary(state.industry);
     const goodsPart = goodsSuffix ? ` · Goods: ${goodsSuffix}` : "";
-    condInd.textContent = c ? `Industry / company: ${c}${roleSuffix}${goodsPart}` : "";
+    const rawSuffix = formatParticipantRawMaterialsSummary(state.industry);
+    const rawPart = rawSuffix ? ` · Raw materials: ${rawSuffix}` : "";
+    condInd.textContent = c ? `Industry / company: ${c}${roleSuffix}${goodsPart}${rawPart}` : "";
     condInd.classList.toggle("is-hidden", !c || !viewingParticipantId);
   }
 
   updateParticipantCompanyBanner();
+  updateParticipantRawMaterialOriginBanner();
 }
 
 function shouldShowParticipantCompanyBanner() {
@@ -677,7 +823,9 @@ function shouldShowParticipantCompanyBanner() {
   const mapGatesOpen = Boolean(
     document.getElementById("industryGate")?.classList.contains("is-open") ||
       document.getElementById("roleGate")?.classList.contains("is-open") ||
-      document.getElementById("goodsGate")?.classList.contains("is-open")
+      document.getElementById("goodsGate")?.classList.contains("is-open") ||
+      document.getElementById("rawMaterialsGate")?.classList.contains("is-open") ||
+      document.getElementById("rawMaterialOriginGate")?.classList.contains("is-open")
   );
   return (
     SURVEY_MODE === "participant" &&
@@ -731,6 +879,62 @@ function updateParticipantCompanyBanner() {
   syncParticipantCompanyBannerVisibility();
 }
 
+function shouldShowParticipantRawMaterialOriginBanner() {
+  return (
+    SURVEY_MODE === "participant" &&
+    !readOnly &&
+    ui.activeStep === "locations" &&
+    ui.rawMaterialBranchMap !== null
+  );
+}
+
+function syncParticipantRawMaterialOriginBannerVisibility() {
+  const el = document.getElementById("participantRawMaterialOriginBanner");
+  if (!el) return;
+  const show = shouldShowParticipantRawMaterialOriginBanner();
+  if (!show) rawMaterialOriginBannerPointerOnMap = false;
+  else if (map?.getContainer()?.matches?.(":hover")) rawMaterialOriginBannerPointerOnMap = true;
+  const visible = show && rawMaterialOriginBannerPointerOnMap;
+  const idx = ui.rawMaterialBranchMap?.materialIndex;
+  const matName =
+    idx != null ? String(state.industry.rawMaterials[idx] ?? "").trim() || "this material" : "this material";
+  el.textContent = `Please Mark the Originating Location for ${matName}`;
+  el.classList.toggle("is-hidden", !visible);
+  el.setAttribute("aria-hidden", visible ? "false" : "true");
+  if (!visible) {
+    el.style.left = "";
+    el.style.top = "";
+    return;
+  }
+  if (!el.style.left) {
+    const wrap = el.closest(".mapWrap");
+    const r = wrap?.getBoundingClientRect();
+    if (r) positionParticipantRawMaterialOriginBanner(r.left + r.width / 2, r.top + r.height / 2);
+  }
+}
+
+function positionParticipantRawMaterialOriginBanner(clientX, clientY) {
+  const el = document.getElementById("participantRawMaterialOriginBanner");
+  const wrap = el?.closest(".mapWrap");
+  if (!el || !wrap || el.classList.contains("is-hidden")) return;
+  const rect = wrap.getBoundingClientRect();
+  const offX = 14;
+  const offY = 14;
+  let x = clientX - rect.left + offX;
+  let y = clientY - rect.top + offY;
+  const bw = el.offsetWidth || 1;
+  const bh = el.offsetHeight || 1;
+  const pad = 8;
+  x = Math.min(Math.max(pad, x), Math.max(pad, rect.width - bw - pad));
+  y = Math.min(Math.max(pad, y), Math.max(pad, rect.height - bh - pad));
+  el.style.left = `${x}px`;
+  el.style.top = `${y}px`;
+}
+
+function updateParticipantRawMaterialOriginBanner() {
+  syncParticipantRawMaterialOriginBannerVisibility();
+}
+
 function setStep(step) {
   ui.activeStep = step;
   document.querySelectorAll(".tab").forEach((el) => {
@@ -751,6 +955,7 @@ function setStep(step) {
   if (pill) pill.textContent = labelMap[step] ?? "Survey";
 
   updateParticipantCompanyBanner();
+  updateParticipantRawMaterialOriginBanner();
 
   if (step !== "locations") clearPendingLocation();
 
@@ -987,6 +1192,9 @@ function addLocation(type, latlng) {
   if (SURVEY_MODE === "participant" && type === "workplace") {
     maybeOpenParticipantRoleGate();
     if (!participantNeedsRoleGate()) maybeOpenParticipantGoodsGate();
+    if (!participantNeedsRoleGate() && !participantNeedsGoodsGate()) {
+      maybeOpenParticipantRawMaterialsGate();
+    }
     setParticipantMapHintAfterIndustryGate();
   }
 }
@@ -1000,10 +1208,16 @@ function clearLocations() {
     roleKey: "",
     roleOtherDetail: "",
     goodsCategoryKeys: [],
-    goodsOtherDetail: ""
+    goodsOtherDetail: "",
+    rawMaterials: [],
+    rawMaterialBranches: []
   };
+  ui.rawMaterialBranchMap = null;
+  ui.rawMaterialOriginEditingIndex = null;
   document.getElementById("roleGate")?.classList.remove("is-open");
   document.getElementById("goodsGate")?.classList.remove("is-open");
+  document.getElementById("rawMaterialsGate")?.classList.remove("is-open");
+  document.getElementById("rawMaterialOriginGate")?.classList.remove("is-open");
   syncParticipantMapGateOverlay();
   layers.locations.clearLayers();
   saveState();
@@ -1134,6 +1348,28 @@ function exportAllDataCSVFromState(stateObj, participantMeta = null) {
     ? stateObj.industry.goodsCategoryKeys.join("|")
     : "";
   const industryGoodsOther = String(stateObj.industry?.goodsOtherDetail ?? "");
+  const industryRawMaterials = Array.isArray(stateObj.industry?.rawMaterials)
+    ? stateObj.industry.rawMaterials.join("|")
+    : "";
+  let industryRawMaterialBranchesJson = "";
+  try {
+    const mats = stateObj.industry?.rawMaterials ?? [];
+    const br = stateObj.industry?.rawMaterialBranches ?? [];
+    industryRawMaterialBranchesJson = JSON.stringify(
+      mats.map((label, i) => {
+        const b = br[i] || {};
+        return {
+          material: String(label ?? "").trim(),
+          origin: b.originCategoryKey ?? "",
+          originOther: String(b.originOtherDetail ?? ""),
+          originX: typeof b.originX === "number" ? b.originX : null,
+          originY: typeof b.originY === "number" ? b.originY : null
+        };
+      })
+    );
+  } catch {
+    industryRawMaterialBranchesJson = "";
+  }
   const baseHeader = [
     "record_type",
     "section",
@@ -1161,13 +1397,25 @@ function exportAllDataCSVFromState(stateObj, participantMeta = null) {
           "industry_role_detail",
           "industry_goods_keys",
           "industry_goods_other",
+          "industry_raw_materials",
+          "industry_raw_material_branches_json",
           ...baseHeader
         ]
       : baseHeader
   );
 
   const rowPrefix = withP
-    ? [pid, plab, industryCo, industryRole, industryRoleDetail, industryGoodsKeys, industryGoodsOther]
+    ? [
+        pid,
+        plab,
+        industryCo,
+        industryRole,
+        industryRoleDetail,
+        industryGoodsKeys,
+        industryGoodsOther,
+        industryRawMaterials,
+        industryRawMaterialBranchesJson
+      ]
     : [];
 
   for (const loc of stateObj.locations) {
@@ -1301,7 +1549,7 @@ async function exportAllParticipantsCSV() {
   }
   const list = await res.json();
   const headerRow =
-    "participant_id,participant_label,industry_company,industry_role,industry_role_detail,industry_goods_keys,industry_goods_other,record_type,section,location_type,id,x_2263,y_2263,lat,lng,route_mode,route_mode_key,length_miles,transfer_applied_gold,transfer_cost_gold,segment_cost_gold,section_total_cost_gold_after";
+    "participant_id,participant_label,industry_company,industry_role,industry_role_detail,industry_goods_keys,industry_goods_other,industry_raw_materials,industry_raw_material_branches_json,record_type,section,location_type,id,x_2263,y_2263,lat,lng,route_mode,route_mode_key,length_miles,transfer_applied_gold,transfer_cost_gold,segment_cost_gold,section_total_cost_gold_after";
   const chunks = [headerRow];
   for (const p of list) {
     const r = await fetch(`/api/conductor/participants/${encodeURIComponent(p.id)}`);
@@ -1454,6 +1702,16 @@ function setupMap() {
       return;
     }
 
+    if (
+      SURVEY_MODE === "participant" &&
+      !readOnly &&
+      ui.activeStep === "locations" &&
+      ui.rawMaterialBranchMap !== null
+    ) {
+      setPendingRawMaterialOrigin(ui.rawMaterialBranchMap.materialIndex, e.latlng);
+      return;
+    }
+
     if (ui.locationType !== "none") {
       if (
         SURVEY_MODE === "participant" &&
@@ -1480,6 +1738,19 @@ function setupMap() {
     companyBannerPointerOnMap = false;
     syncParticipantCompanyBannerVisibility();
   });
+
+  const onParticipantRawMaterialOriginBannerPointer = (e) => {
+    if (!shouldShowParticipantRawMaterialOriginBanner()) return;
+    rawMaterialOriginBannerPointerOnMap = true;
+    syncParticipantRawMaterialOriginBannerVisibility();
+    positionParticipantRawMaterialOriginBanner(e.clientX, e.clientY);
+  };
+  mapContainer.addEventListener("mousemove", onParticipantRawMaterialOriginBannerPointer);
+  mapContainer.addEventListener("mouseenter", onParticipantRawMaterialOriginBannerPointer);
+  mapContainer.addEventListener("mouseleave", () => {
+    rawMaterialOriginBannerPointerOnMap = false;
+    syncParticipantRawMaterialOriginBannerVisibility();
+  });
 }
 
 async function loadIBXAssets() {
@@ -1494,9 +1765,18 @@ async function loadIBXAssets() {
 }
 
 function setParticipantMapHintAfterIndustryGate() {
-  const hasWorkplace = state.locations.some((l) => l.locationType === "workplace");
   const hintEl = document.getElementById("mapHint");
   if (!hintEl) return;
+
+  if (SURVEY_MODE === "participant" && ui.rawMaterialBranchMap !== null) {
+    const idx = ui.rawMaterialBranchMap.materialIndex;
+    const name = String(state.industry.rawMaterials[idx] ?? "").trim() || "this material";
+    ui.locationType = "none";
+    hintEl.textContent = `Originating location for “${name}”: click the map to place a point, then confirm with √ or cancel with ×.`;
+    return;
+  }
+
+  const hasWorkplace = state.locations.some((l) => l.locationType === "workplace");
   if (!hasWorkplace) {
     ui.locationType = "workplace";
     hintEl.textContent =
@@ -1515,13 +1795,20 @@ function syncParticipantMapGateOverlay() {
   const ind = document.getElementById("industryGate");
   const role = document.getElementById("roleGate");
   const goods = document.getElementById("goodsGate");
+  const rawMaterials = document.getElementById("rawMaterialsGate");
+  const rawMatOrigin = document.getElementById("rawMaterialOriginGate");
   const anyOpen = Boolean(
-    ind?.classList.contains("is-open") || role?.classList.contains("is-open") || goods?.classList.contains("is-open")
+    ind?.classList.contains("is-open") ||
+      role?.classList.contains("is-open") ||
+      goods?.classList.contains("is-open") ||
+      rawMaterials?.classList.contains("is-open") ||
+      rawMatOrigin?.classList.contains("is-open")
   );
   mapWrap.classList.toggle("map-gate-open", anyOpen);
   if (anyOpen) document.body.dataset.mapGateOpen = "1";
   else delete document.body.dataset.mapGateOpen;
   updateParticipantCompanyBanner();
+  updateParticipantRawMaterialOriginBanner();
 }
 
 function participantHasWorkplaceLocation() {
@@ -1561,6 +1848,30 @@ function participantNeedsGoodsGate() {
     participantIndustryRoleIsComplete() &&
     !participantGoodsIsComplete()
   );
+}
+
+function participantRawMaterialsIsComplete() {
+  const arr = state.industry?.rawMaterials;
+  if (!Array.isArray(arr)) return false;
+  return arr.some((s) => String(s ?? "").trim().length > 0);
+}
+
+function participantNeedsRawMaterialsGate() {
+  return (
+    SURVEY_MODE === "participant" &&
+    participantHasWorkplaceLocation() &&
+    participantIndustryRoleIsComplete() &&
+    participantGoodsIsComplete() &&
+    !participantRawMaterialsIsComplete()
+  );
+}
+
+function formatParticipantRawMaterialsSummary(industry) {
+  const ind = industry ?? state.industry;
+  const arr = ind?.rawMaterials;
+  if (!Array.isArray(arr)) return "";
+  const parts = arr.map((s) => String(s ?? "").trim()).filter(Boolean);
+  return parts.length ? parts.join("; ") : "";
 }
 
 function formatParticipantGoodsSummary(industry) {
@@ -1661,6 +1972,7 @@ function initParticipantRoleGateOnce() {
       setTimeout(() => map.invalidateSize(), 200);
     }
     maybeOpenParticipantGoodsGate();
+    if (!participantNeedsGoodsGate()) maybeOpenParticipantRawMaterialsGate();
   });
 }
 
@@ -1747,11 +2059,262 @@ function initParticipantGoodsGateOnce() {
       requestAnimationFrame(() => map.invalidateSize());
       setTimeout(() => map.invalidateSize(), 200);
     }
+    maybeOpenParticipantRawMaterialsGate();
   });
 }
 
 function maybeOpenParticipantGoodsGate() {
   if (participantNeedsGoodsGate()) openParticipantGoodsGate();
+}
+
+function appendRawMaterialRowToList(container, value = "") {
+  const row = document.createElement("div");
+  row.className = "rawMaterialsRow";
+  row.setAttribute("role", "listitem");
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "goodsGate__input";
+  input.maxLength = 200;
+  input.autocomplete = "off";
+  input.placeholder = "Raw material";
+  input.value = value;
+
+  const rm = document.createElement("button");
+  rm.type = "button";
+  rm.className = "ghostBtn rawMaterialsRow__remove";
+  rm.textContent = "Remove";
+  rm.addEventListener("click", () => {
+    const rows = container.querySelectorAll(".rawMaterialsRow");
+    if (rows.length <= 1) {
+      input.value = "";
+      input.focus();
+      return;
+    }
+    row.remove();
+  });
+
+  row.appendChild(input);
+  row.appendChild(rm);
+  container.appendChild(row);
+}
+
+function openParticipantRawMaterialsGate() {
+  const gate = document.getElementById("rawMaterialsGate");
+  const list = document.getElementById("rawMaterialsList");
+  if (!gate || !list) return;
+  gate.classList.add("is-open");
+  syncParticipantMapGateOverlay();
+
+  list.innerHTML = "";
+  const saved = state.industry?.rawMaterials;
+  const hasSaved = Array.isArray(saved) && saved.some((s) => String(s ?? "").trim());
+  const seeds = hasSaved ? saved.map((s) => String(s ?? "")) : [""];
+  for (const v of seeds) appendRawMaterialRowToList(list, v);
+
+  requestAnimationFrame(() => {
+    list.querySelector("input")?.focus();
+  });
+}
+
+function initParticipantRawMaterialsGateOnce() {
+  if (SURVEY_MODE !== "participant" || document.body.dataset.participantRawMaterialsGateBound === "1") return;
+  const gate = document.getElementById("rawMaterialsGate");
+  const list = document.getElementById("rawMaterialsList");
+  const addBtn = document.getElementById("rawMaterialsAddBtn");
+  const btn = document.getElementById("rawMaterialsContinueBtn");
+  if (!gate || !list) return;
+  document.body.dataset.participantRawMaterialsGateBound = "1";
+
+  addBtn?.addEventListener("click", () => {
+    if (list.querySelectorAll(".rawMaterialsRow").length >= 40) {
+      window.alert("You can add up to 40 raw materials.");
+      return;
+    }
+    appendRawMaterialRowToList(list, "");
+    list.querySelector(".rawMaterialsRow:last-of-type input")?.focus();
+  });
+
+  btn?.addEventListener("click", () => {
+    const inputs = list.querySelectorAll(".rawMaterialsRow input");
+    const raw = [];
+    inputs.forEach((el) => {
+      const t = String(el.value ?? "").trim();
+      if (t) raw.push(t);
+    });
+    if (raw.length === 0) {
+      window.alert("Please enter at least one raw material.");
+      return;
+    }
+    state.industry = {
+      ...state.industry,
+      rawMaterials: normalizeRawMaterialsFromPayload(raw)
+    };
+    ensureRawMaterialBranchesAligned();
+    gate.classList.remove("is-open");
+    syncParticipantMapGateOverlay();
+    void flushSaveToServer();
+    rebuildFromState();
+    uiUpdateStats();
+    setParticipantMapHintAfterIndustryGate();
+    if (map) {
+      requestAnimationFrame(() => map.invalidateSize());
+      setTimeout(() => map.invalidateSize(), 200);
+    }
+    if (state.industry.rawMaterials.length > 0) {
+      openRawMaterialOriginQuestionGate(0);
+    }
+  });
+}
+
+function maybeOpenParticipantRawMaterialsGate() {
+  if (participantNeedsRawMaterialsGate()) openParticipantRawMaterialsGate();
+}
+
+function participantRawMaterialBranchWorkIncomplete() {
+  if (SURVEY_MODE !== "participant") return false;
+  if (!participantRawMaterialsIsComplete()) return false;
+  const mats = state.industry.rawMaterials ?? [];
+  if (mats.length === 0) return false;
+  ensureRawMaterialBranchesAligned();
+  for (let i = 0; i < mats.length; i++) {
+    const b = state.industry.rawMaterialBranches[i];
+    if (!b?.originCategoryKey) return true;
+    if (b.originCategoryKey === "other" && !String(b.originOtherDetail ?? "").trim()) return true;
+    if (typeof b.originX !== "number" || typeof b.originY !== "number") return true;
+  }
+  return false;
+}
+
+function resumeRawMaterialBranchFlow() {
+  if (!participantRawMaterialBranchWorkIncomplete()) {
+    ui.rawMaterialBranchMap = null;
+    ui.rawMaterialOriginEditingIndex = null;
+    return;
+  }
+  ensureRawMaterialBranchesAligned();
+  const mats = state.industry.rawMaterials ?? [];
+  for (let i = 0; i < mats.length; i++) {
+    const b = state.industry.rawMaterialBranches[i];
+    if (!b?.originCategoryKey) {
+      openRawMaterialOriginQuestionGate(i);
+      return;
+    }
+    if (b.originCategoryKey === "other" && !String(b.originOtherDetail ?? "").trim()) {
+      openRawMaterialOriginQuestionGate(i);
+      return;
+    }
+    if (typeof b.originX !== "number" || typeof b.originY !== "number") {
+      ui.rawMaterialBranchMap = { materialIndex: i };
+      ui.rawMaterialOriginEditingIndex = null;
+      syncParticipantMapGateOverlay();
+      setParticipantMapHintAfterIndustryGate();
+      return;
+    }
+  }
+}
+
+function advanceAfterRawMaterialOriginPlaced(completedIndex) {
+  const mats = state.industry.rawMaterials ?? [];
+  const next = completedIndex + 1;
+  if (next < mats.length) {
+    openRawMaterialOriginQuestionGate(next);
+  } else {
+    ui.rawMaterialBranchMap = null;
+    ui.rawMaterialOriginEditingIndex = null;
+    syncParticipantMapGateOverlay();
+    setParticipantMapHintAfterIndustryGate();
+    void flushSaveToServer();
+  }
+}
+
+function openRawMaterialOriginQuestionGate(materialIndex) {
+  const gate = document.getElementById("rawMaterialOriginGate");
+  const titleEl = document.getElementById("rawMaterialOriginGateTitle");
+  if (!gate) return;
+  const matName = String(state.industry.rawMaterials[materialIndex] ?? "").trim() || "this material";
+  if (titleEl) {
+    titleEl.textContent = `Where does ${matName} originate?`;
+  }
+  ui.rawMaterialOriginEditingIndex = materialIndex;
+  ui.rawMaterialBranchMap = null;
+  ensureRawMaterialBranchesAligned();
+  const br = state.industry.rawMaterialBranches[materialIndex] ?? {};
+
+  document.querySelectorAll('input[name="rawMaterialOriginChoice"]').forEach((r) => {
+    r.checked = br.originCategoryKey === r.value;
+  });
+  const otherWrap = document.getElementById("rawMaterialOriginOtherWrap");
+  const showOther = br.originCategoryKey === "other";
+  otherWrap?.classList.toggle("is-hidden", !showOther);
+  const oi = document.getElementById("rawMaterialOriginOtherInput");
+  if (oi) oi.value = String(br.originOtherDetail ?? "");
+
+  gate.classList.add("is-open");
+  syncParticipantMapGateOverlay();
+  requestAnimationFrame(() => {
+    document.querySelector('input[name="rawMaterialOriginChoice"]')?.focus();
+  });
+}
+
+function initParticipantRawMaterialOriginGateOnce() {
+  if (SURVEY_MODE !== "participant" || document.body.dataset.participantRawMaterialOriginGateBound === "1") {
+    return;
+  }
+  const gate = document.getElementById("rawMaterialOriginGate");
+  const btn = document.getElementById("rawMaterialOriginContinueBtn");
+  const otherWrap = document.getElementById("rawMaterialOriginOtherWrap");
+  const otherInput = document.getElementById("rawMaterialOriginOtherInput");
+  if (!gate) return;
+  document.body.dataset.participantRawMaterialOriginGateBound = "1";
+
+  document.querySelectorAll('input[name="rawMaterialOriginChoice"]').forEach((radio) => {
+    radio.addEventListener("change", () => {
+      const show = radio.value === "other" && radio.checked;
+      otherWrap?.classList.toggle("is-hidden", !show);
+      if (show) otherInput?.focus();
+    });
+  });
+
+  otherInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") btn?.click();
+  });
+
+  btn?.addEventListener("click", () => {
+    const idx = ui.rawMaterialOriginEditingIndex;
+    if (idx == null || idx < 0) return;
+    const sel = document.querySelector('input[name="rawMaterialOriginChoice"]:checked');
+    if (!sel) {
+      window.alert("Please select where this raw material originates.");
+      return;
+    }
+    let detail = "";
+    if (sel.value === "other") {
+      detail = String(otherInput?.value ?? "").trim();
+      if (!detail) {
+        window.alert("Please specify for “Others”.");
+        return;
+      }
+    }
+    ensureRawMaterialBranchesAligned();
+    state.industry.rawMaterialBranches[idx] = {
+      ...state.industry.rawMaterialBranches[idx],
+      originCategoryKey: sel.value,
+      originOtherDetail: sel.value === "other" ? detail : ""
+    };
+    gate.classList.remove("is-open");
+    syncParticipantMapGateOverlay();
+    ui.rawMaterialBranchMap = { materialIndex: idx };
+    ui.rawMaterialOriginEditingIndex = null;
+    void flushSaveToServer();
+    rebuildFromState();
+    uiUpdateStats();
+    setParticipantMapHintAfterIndustryGate();
+    if (map) {
+      requestAnimationFrame(() => map.invalidateSize());
+      setTimeout(() => map.invalidateSize(), 200);
+    }
+  });
 }
 
 async function finishParticipantBoot() {
@@ -1769,6 +2332,8 @@ async function finishParticipantBoot() {
   setParticipantMapHintAfterIndustryGate();
   initParticipantRoleGateOnce();
   initParticipantGoodsGateOnce();
+  initParticipantRawMaterialsGateOnce();
+  initParticipantRawMaterialOriginGateOnce();
 
   if (!document.body.dataset.participantPagehideBound) {
     document.body.dataset.participantPagehideBound = "1";
@@ -1886,6 +2451,10 @@ async function bootParticipant() {
     openParticipantRoleGate();
   } else if (participantNeedsGoodsGate()) {
     openParticipantGoodsGate();
+  } else if (participantNeedsRawMaterialsGate()) {
+    openParticipantRawMaterialsGate();
+  } else if (participantRawMaterialBranchWorkIncomplete()) {
+    resumeRawMaterialBranchFlow();
   }
 }
 
@@ -1964,7 +2533,9 @@ async function deleteConductorParticipant(p) {
       roleKey: "",
       roleOtherDetail: "",
       goodsCategoryKeys: [],
-      goodsOtherDetail: ""
+      goodsOtherDetail: "",
+      rawMaterials: [],
+      rawMaterialBranches: []
     };
     state.locations = [];
     state.routes = {
