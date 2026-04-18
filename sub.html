@@ -515,6 +515,46 @@
           </div>
 
           <div
+            id="rawMaterialSupplyChainIntroGate"
+            class="rawMaterialSupplyChainIntroGate rawMaterialSupplyChainIntroGate--floating"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rawMaterialSupplyChainIntroTitle"
+          >
+            <div class="participantGate__card rawMaterialSupplyChainIntroGate__card">
+              <h2 class="rawMaterialSupplyChainIntroGate__title" id="rawMaterialSupplyChainIntroTitle"></h2>
+              <div class="participantGate__actions">
+                <button class="primaryBtn" id="rawMaterialSupplyChainIntroContinueBtn" type="button">
+                  Continue
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div
+            id="rawMaterialSupplyChainDiagramGate"
+            class="rawMaterialSupplyChainDiagramGate rawMaterialSupplyChainDiagramGate--floating"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rawMaterialSupplyChainDiagramTitle"
+          >
+            <div class="participantGate__card supplyChainDiagramGate__card">
+              <h2 class="supplyChainDiagramGate__title" id="rawMaterialSupplyChainDiagramTitle">
+                Please Provide the Supply Chain Information
+              </h2>
+              <p class="participantGate__p supplyChainDiagramGate__intro">
+                Raw Material <span id="rawMaterialSupplyChainDiagramBadge" class="supplyChainDiagram__rmBadge"></span>
+              </p>
+              <div id="rawMaterialSupplyChainDiagramMount" class="supplyChainDiagramMount"></div>
+              <div class="participantGate__actions">
+                <button type="button" class="primaryBtn" id="rawMaterialSupplyChainDiagramSaveBtn">
+                  Confirm &amp; Save
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div
             id="rawMaterialOriginGate"
             class="rawMaterialOriginGate rawMaterialOriginGate--floating"
             role="dialog"
@@ -547,6 +587,11 @@
                   <input type="radio" name="rawMaterialOriginChoice" value="airport" />
                   <img src="Icons/Locations/Airport.svg" class="goodsGate__icon" alt="" aria-hidden="true" />
                   Airport
+                </label>
+                <label class="goodsGate__option">
+                  <input type="radio" name="rawMaterialOriginChoice" value="port" />
+                  <img src="Icons/Locations/Port.svg" class="goodsGate__icon" alt="" aria-hidden="true" />
+                  Port
                 </label>
                 <label class="goodsGate__option">
                   <input type="radio" name="rawMaterialOriginChoice" value="other" />

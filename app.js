@@ -59,7 +59,8 @@ const ORIGIN_TYPE_ICONS = {
   storage_facility: "Icons/Locations/Storage.svg",
   distribution_center: "Icons/Locations/Distribution.svg",
   manufacturing_facility: "Icons/Locations/Manufactoring.svg",
-  airport: "Icons/Locations/Airport.svg"
+  airport: "Icons/Locations/Airport.svg",
+  port: "Icons/Locations/Port.svg"
 };
 
 /** Participant industry questionnaire: multi-select goods / products (keys match checkbox values in sub.html). */
@@ -80,9 +81,42 @@ const RAW_MATERIAL_ORIGIN_OPTIONS = [
   { key: "distribution_center", label: "Distribution center" },
   { key: "manufacturing_facility", label: "Manufacturing Facility" },
   { key: "airport", label: "Airport" },
+  { key: "port", label: "Port" },
   { key: "other", label: "Others" }
 ];
 const RAW_MATERIAL_ORIGIN_KEYS = new Set(RAW_MATERIAL_ORIGIN_OPTIONS.map((o) => o.key));
+
+/** Second branch: A/C location types (includes Port). */
+const SUPPLY_CHAIN_LOCATION_OPTIONS = [
+  { key: "storage_facility", label: "Storage Facility" },
+  { key: "distribution_center", label: "Distribution center" },
+  { key: "manufacturing_facility", label: "Manufacturing Facility" },
+  { key: "airport", label: "Airport" },
+  { key: "port", label: "Port" },
+  { key: "other", label: "Others" }
+];
+const SUPPLY_CHAIN_LOCATION_KEYS = new Set(SUPPLY_CHAIN_LOCATION_OPTIONS.map((o) => o.key));
+
+/** Node B — transportation mode change (keys match diagram selects). */
+const SUPPLY_CHAIN_MODAL_CHANGE_OPTIONS = [
+  { key: "train_to_huge_truck", label: "Train to Huge Truck" },
+  { key: "train_to_small_truck", label: "Train to Small Truck" },
+  { key: "small_truck_to_train", label: "Small Truck to Train" },
+  { key: "huge_truck_to_train", label: "Huge Truck to Train" },
+  { key: "huge_truck_to_small_truck", label: "Huge Truck to Small Truck" },
+  { key: "small_truck_to_huge_truck", label: "Small Truck to Huge Truck" },
+  { key: "other", label: "Others" }
+];
+const SUPPLY_CHAIN_MODAL_CHANGE_KEYS = new Set(SUPPLY_CHAIN_MODAL_CHANGE_OPTIONS.map((o) => o.key));
+
+/** Transportation segments between nodes. */
+const SUPPLY_CHAIN_TRANSPORT_MODE_OPTIONS = [
+  { key: "train", label: "Train" },
+  { key: "huge_truck", label: "Huge Truck" },
+  { key: "small_truck", label: "Small Truck" },
+  { key: "other", label: "Others" }
+];
+const SUPPLY_CHAIN_TRANSPORT_MODE_KEYS = new Set(SUPPLY_CHAIN_TRANSPORT_MODE_OPTIONS.map((o) => o.key));
 /** Participant skipped the whole origin branch (category + map) for this material. */
 const RAW_MATERIAL_ORIGIN_SKIPPED_KEY = "skipped";
 
@@ -111,7 +145,9 @@ function normalizeRawMaterialBranchesFromPayload(rawMaterials, branchesIn) {
       originOtherDetail: String(b.originOtherDetail ?? ""),
       originX: typeof ox === "number" && Number.isFinite(ox) ? ox : null,
       originY: typeof oy === "number" && Number.isFinite(oy) ? oy : null,
-      originMapSkipped: Boolean(b.originMapSkipped)
+      originMapSkipped: Boolean(b.originMapSkipped),
+      supplyChainIntroAcknowledged: Boolean(b.supplyChainIntroAcknowledged),
+      supplyChainDiagram: normalizeSupplyChainDiagram(b.supplyChainDiagram)
     });
   }
   return out;
@@ -130,7 +166,9 @@ function ensureRawMaterialBranchesAligned() {
         originOtherDetail: String(prev.originOtherDetail ?? ""),
         originX: typeof prev.originX === "number" && Number.isFinite(prev.originX) ? prev.originX : null,
         originY: typeof prev.originY === "number" && Number.isFinite(prev.originY) ? prev.originY : null,
-        originMapSkipped: Boolean(prev.originMapSkipped)
+        originMapSkipped: Boolean(prev.originMapSkipped),
+        supplyChainIntroAcknowledged: Boolean(prev.supplyChainIntroAcknowledged),
+        supplyChainDiagram: normalizeSupplyChainDiagram(prev.supplyChainDiagram ?? defaultSupplyChainDiagram())
       });
     } else {
       next.push({
@@ -138,7 +176,9 @@ function ensureRawMaterialBranchesAligned() {
         originOtherDetail: "",
         originX: null,
         originY: null,
-        originMapSkipped: false
+        originMapSkipped: false,
+        supplyChainIntroAcknowledged: false,
+        supplyChainDiagram: defaultSupplyChainDiagram()
       });
     }
   }
@@ -163,6 +203,195 @@ function rawMaterialOriginBranchNeedsMap(b) {
   if (hasCoords) return false;
   if (b.originMapSkipped) return false;
   return true;
+}
+
+/** Shown once per raw material before the origin-type branch questions. */
+function rawMaterialSupplyChainBranchNeedsIntroGate(b) {
+  return rawMaterialOriginBranchNeedsCategoryGate(b) && !Boolean(b?.supplyChainIntroAcknowledged);
+}
+
+function defaultSupplyChainDiagram() {
+  return {
+    destinationCategoryKey: "",
+    destinationOtherDetail: "",
+    modalChangeNodes: [{ modalChangeKey: "", otherDetail: "" }],
+    transportLegs: [
+      { modeKey: "", otherDetail: "" },
+      { modeKey: "", otherDetail: "" }
+    ]
+  };
+}
+
+function normalizeSupplyLocationKeyForDiagram(k) {
+  const s = String(k ?? "").trim();
+  return SUPPLY_CHAIN_LOCATION_KEYS.has(s) ? s : "";
+}
+
+function normalizeModalChangeKey(k) {
+  const s = String(k ?? "").trim();
+  return SUPPLY_CHAIN_MODAL_CHANGE_KEYS.has(s) ? s : "";
+}
+
+function normalizeTransportModeKey(k) {
+  const s = String(k ?? "").trim();
+  return SUPPLY_CHAIN_TRANSPORT_MODE_KEYS.has(s) ? s : "";
+}
+
+function normalizeSupplyChainDiagram(raw) {
+  const base = raw && typeof raw === "object" ? raw : {};
+  const destKey = normalizeSupplyLocationKeyForDiagram(base.destinationCategoryKey);
+  const destOther = String(base.destinationOtherDetail ?? "");
+  let nodes = Array.isArray(base.modalChangeNodes) ? base.modalChangeNodes : [];
+  nodes = nodes.map((n) => ({
+    modalChangeKey: normalizeModalChangeKey(n?.modalChangeKey),
+    otherDetail: String(n?.otherDetail ?? "")
+  }));
+  let legs = Array.isArray(base.transportLegs) ? base.transportLegs : [];
+  legs = legs.map((t) => ({
+    modeKey: normalizeTransportModeKey(t?.modeKey),
+    otherDetail: String(t?.otherDetail ?? "")
+  }));
+  if (nodes.length === 0) {
+    while (legs.length < 1) legs.push({ modeKey: "", otherDetail: "" });
+    legs = legs.slice(0, 1).map((t) => ({
+      modeKey: normalizeTransportModeKey(t?.modeKey),
+      otherDetail: String(t?.otherDetail ?? "")
+    }));
+  } else {
+    while (legs.length < nodes.length + 1) legs.push({ modeKey: "", otherDetail: "" });
+    legs = legs.slice(0, nodes.length + 1).map((t) => ({
+      modeKey: normalizeTransportModeKey(t?.modeKey),
+      otherDetail: String(t?.otherDetail ?? "")
+    }));
+  }
+  return {
+    destinationCategoryKey: destKey,
+    destinationOtherDetail: destOther,
+    modalChangeNodes: nodes,
+    transportLegs: legs
+  };
+}
+
+function modalChangeFromMode(modalChangeKey) {
+  switch (String(modalChangeKey ?? "").trim()) {
+    case "train_to_huge_truck":
+    case "train_to_small_truck":
+      return "train";
+    case "small_truck_to_train":
+    case "small_truck_to_huge_truck":
+      return "small_truck";
+    case "huge_truck_to_train":
+    case "huge_truck_to_small_truck":
+      return "huge_truck";
+    default:
+      return null;
+  }
+}
+
+function modalChangeToMode(modalChangeKey) {
+  switch (String(modalChangeKey ?? "").trim()) {
+    case "train_to_huge_truck":
+    case "small_truck_to_huge_truck":
+      return "huge_truck";
+    case "train_to_small_truck":
+    case "huge_truck_to_small_truck":
+      return "small_truck";
+    case "small_truck_to_train":
+    case "huge_truck_to_train":
+      return "train";
+    default:
+      return null;
+  }
+}
+
+function allowedModalChangeKeysForIncomingMode(incomingModeKey) {
+  const m = normalizeTransportModeKey(incomingModeKey);
+  if (m === "huge_truck") return new Set(["huge_truck_to_train", "huge_truck_to_small_truck", "other"]);
+  if (m === "small_truck") return new Set(["small_truck_to_train", "small_truck_to_huge_truck", "other"]);
+  if (m === "train") return new Set(["train_to_huge_truck", "train_to_small_truck", "other"]);
+  return null; // no restriction (empty/other)
+}
+
+/**
+ * Applies cascading constraints based on previous answers.
+ * - B(i) modal-change options depend on incoming Transportation(i+1) mode.
+ * - Transportation(i+2) is forced based on selected B(i) modal-change (when not "other").
+ */
+function applySupplyChainDiagramConstraints(dIn) {
+  const d0 = normalizeSupplyChainDiagram(dIn);
+  const nodes = d0.modalChangeNodes.map((n) => ({ ...n }));
+  const legs = d0.transportLegs.map((t) => ({ ...t }));
+
+  // Constrain modal change choices based on incoming leg mode.
+  for (let i = 0; i < nodes.length; i++) {
+    const incoming = legs[i]?.modeKey ?? "";
+    const allowed = allowedModalChangeKeysForIncomingMode(incoming);
+    const mk = normalizeModalChangeKey(nodes[i]?.modalChangeKey);
+    if (allowed && mk && mk !== "other" && !allowed.has(mk)) {
+      nodes[i].modalChangeKey = "";
+      nodes[i].otherDetail = "";
+    }
+  }
+
+  // Force outgoing leg mode based on modal change selection.
+  for (let i = 0; i < nodes.length; i++) {
+    const mk = normalizeModalChangeKey(nodes[i]?.modalChangeKey);
+    if (!mk || mk === "other") continue;
+    const requiredIncoming = modalChangeFromMode(mk);
+    const requiredOutgoing = modalChangeToMode(mk);
+    if (requiredIncoming && legs[i]?.modeKey && legs[i].modeKey !== requiredIncoming) {
+      // If the incoming mode no longer matches, clear the modal-change selection (can't enforce mismatch).
+      nodes[i].modalChangeKey = "";
+      nodes[i].otherDetail = "";
+      continue;
+    }
+    if (requiredOutgoing) {
+      legs[i + 1] = legs[i + 1] ?? { modeKey: "", otherDetail: "" };
+      if (legs[i + 1].modeKey !== requiredOutgoing) {
+        legs[i + 1].modeKey = requiredOutgoing;
+        legs[i + 1].otherDetail = "";
+      }
+    }
+  }
+
+  return normalizeSupplyChainDiagram({
+    ...d0,
+    modalChangeNodes: nodes,
+    transportLegs: legs
+  });
+}
+
+function isSupplyChainDiagramComplete(d) {
+  if (!d || typeof d !== "object") return false;
+  const destKey = normalizeSupplyLocationKeyForDiagram(d.destinationCategoryKey);
+  if (!destKey) return false;
+  if (destKey === "other" && !String(d.destinationOtherDetail ?? "").trim()) return false;
+  const nodes = d.modalChangeNodes ?? [];
+  const legs = d.transportLegs ?? [];
+  if (nodes.length === 0) {
+    if (legs.length !== 1) return false;
+  } else if (legs.length !== nodes.length + 1) {
+    return false;
+  }
+  for (const n of nodes) {
+    const mk = normalizeModalChangeKey(n?.modalChangeKey);
+    if (!mk) return false;
+    if (mk === "other" && !String(n?.otherDetail ?? "").trim()) return false;
+  }
+  for (const t of legs) {
+    const mode = normalizeTransportModeKey(t?.modeKey);
+    if (!mode) return false;
+    if (mode === "other" && !String(t?.otherDetail ?? "").trim()) return false;
+  }
+  return true;
+}
+
+/** Second branch: supply-chain diagram (after Q1 origin category + map/skip). */
+function rawMaterialSupplyChainBranchNeedsDiagramGate(b) {
+  if (!b) return false;
+  if (b.originCategoryKey === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) return false;
+  if (rawMaterialOriginBranchNeedsCategoryGate(b) || rawMaterialOriginBranchNeedsMap(b)) return false;
+  return !isSupplyChainDiagramComplete(b.supplyChainDiagram);
 }
 
 function formatGold(n) {
@@ -405,7 +634,11 @@ const ui = {
   /** Participant: map phase — place originating location for rawMaterials[materialIndex]. */
   rawMaterialBranchMap: null,
   /** Participant: which material index the origin dialog is editing. */
-  rawMaterialOriginEditingIndex: null
+  rawMaterialOriginEditingIndex: null,
+  /** Participant: material index for the supply-chain intro popup (before branch questions). */
+  rawMaterialSupplyChainIntroIndex: null,
+  /** Participant: material index while editing the supply-chain diagram (second branch). */
+  rawMaterialSupplyChainDiagramIndex: null
 };
 
 const state = {
@@ -890,6 +1123,8 @@ function shouldShowParticipantCompanyBanner() {
       document.getElementById("roleGate")?.classList.contains("is-open") ||
       document.getElementById("goodsGate")?.classList.contains("is-open") ||
       document.getElementById("rawMaterialsGate")?.classList.contains("is-open") ||
+      document.getElementById("rawMaterialSupplyChainIntroGate")?.classList.contains("is-open") ||
+      document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.contains("is-open") ||
       document.getElementById("rawMaterialOriginGate")?.classList.contains("is-open")
   );
   return (
@@ -1279,9 +1514,13 @@ function clearLocations() {
   };
   ui.rawMaterialBranchMap = null;
   ui.rawMaterialOriginEditingIndex = null;
+  ui.rawMaterialSupplyChainIntroIndex = null;
+  ui.rawMaterialSupplyChainDiagramIndex = null;
   document.getElementById("roleGate")?.classList.remove("is-open");
   document.getElementById("goodsGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialsGate")?.classList.remove("is-open");
+  document.getElementById("rawMaterialSupplyChainIntroGate")?.classList.remove("is-open");
+  document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialOriginGate")?.classList.remove("is-open");
   syncParticipantMapGateOverlay();
   layers.locations.clearLayers();
@@ -1429,7 +1668,11 @@ function exportAllDataCSVFromState(stateObj, participantMeta = null) {
           originOther: String(b.originOtherDetail ?? ""),
           originX: typeof b.originX === "number" ? b.originX : null,
           originY: typeof b.originY === "number" ? b.originY : null,
-          originMapSkipped: Boolean(b.originMapSkipped)
+          originMapSkipped: Boolean(b.originMapSkipped),
+          supplyChainIntroAcknowledged: Boolean(b.supplyChainIntroAcknowledged),
+          supplyChainDiagram: b.supplyChainDiagram
+            ? normalizeSupplyChainDiagram(b.supplyChainDiagram)
+            : null
         };
       })
     );
@@ -1864,12 +2107,16 @@ function syncParticipantMapGateOverlay() {
   const role = document.getElementById("roleGate");
   const goods = document.getElementById("goodsGate");
   const rawMaterials = document.getElementById("rawMaterialsGate");
+  const rawMatSupplyIntro = document.getElementById("rawMaterialSupplyChainIntroGate");
+  const rawMatSupplyDiagram = document.getElementById("rawMaterialSupplyChainDiagramGate");
   const rawMatOrigin = document.getElementById("rawMaterialOriginGate");
   const anyOpen = Boolean(
     ind?.classList.contains("is-open") ||
       role?.classList.contains("is-open") ||
       goods?.classList.contains("is-open") ||
       rawMaterials?.classList.contains("is-open") ||
+      rawMatSupplyIntro?.classList.contains("is-open") ||
+      rawMatSupplyDiagram?.classList.contains("is-open") ||
       rawMatOrigin?.classList.contains("is-open")
   );
   mapWrap.classList.toggle("map-gate-open", anyOpen);
@@ -2243,7 +2490,7 @@ function initParticipantRawMaterialsGateOnce() {
       setTimeout(() => map.invalidateSize(), 200);
     }
     if (state.industry.rawMaterials.length > 0) {
-      openRawMaterialOriginQuestionGate(0);
+      resumeRawMaterialBranchFlow();
     }
   });
 }
@@ -2262,6 +2509,7 @@ function participantRawMaterialBranchWorkIncomplete() {
     const b = state.industry.rawMaterialBranches[i];
     if (rawMaterialOriginBranchNeedsCategoryGate(b)) return true;
     if (rawMaterialOriginBranchNeedsMap(b)) return true;
+    if (rawMaterialSupplyChainBranchNeedsDiagramGate(b)) return true;
   }
   return false;
 }
@@ -2270,12 +2518,18 @@ function resumeRawMaterialBranchFlow() {
   if (!participantRawMaterialBranchWorkIncomplete()) {
     ui.rawMaterialBranchMap = null;
     ui.rawMaterialOriginEditingIndex = null;
+    ui.rawMaterialSupplyChainDiagramIndex = null;
+    document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.remove("is-open");
     return;
   }
   ensureRawMaterialBranchesAligned();
   const mats = state.industry.rawMaterials ?? [];
   for (let i = 0; i < mats.length; i++) {
     const b = state.industry.rawMaterialBranches[i];
+    if (rawMaterialSupplyChainBranchNeedsIntroGate(b)) {
+      openRawMaterialSupplyChainIntroGate(i);
+      return;
+    }
     if (rawMaterialOriginBranchNeedsCategoryGate(b)) {
       openRawMaterialOriginQuestionGate(i);
       return;
@@ -2287,27 +2541,424 @@ function resumeRawMaterialBranchFlow() {
       setParticipantMapHintAfterIndustryGate();
       return;
     }
+    if (rawMaterialSupplyChainBranchNeedsDiagramGate(b)) {
+      openRawMaterialSupplyChainDiagramGate(i);
+      return;
+    }
   }
 }
 
 function advanceAfterRawMaterialOriginPlaced(completedIndex) {
-  const mats = state.industry.rawMaterials ?? [];
-  const next = completedIndex + 1;
-  if (next < mats.length) {
-    openRawMaterialOriginQuestionGate(next);
-  } else {
+  void completedIndex;
+  resumeRawMaterialBranchFlow();
+  if (!participantRawMaterialBranchWorkIncomplete()) {
     ui.rawMaterialBranchMap = null;
     ui.rawMaterialOriginEditingIndex = null;
+    ui.rawMaterialSupplyChainDiagramIndex = null;
     syncParticipantMapGateOverlay();
     setParticipantMapHintAfterIndustryGate();
     void flushSaveToServer();
   }
 }
 
+function supplyChainDiagramAddB(dIn) {
+  const d = normalizeSupplyChainDiagram(dIn);
+  const nodes = [...d.modalChangeNodes];
+  let legs = [...d.transportLegs];
+  if (nodes.length === 0) {
+    nodes.push({ modalChangeKey: "", otherDetail: "" });
+    legs = [
+      { modeKey: "", otherDetail: "" },
+      { modeKey: "", otherDetail: "" }
+    ];
+  } else {
+    nodes.push({ modalChangeKey: "", otherDetail: "" });
+    legs.splice(legs.length - 1, 0, { modeKey: "", otherDetail: "" });
+  }
+  return normalizeSupplyChainDiagram({ ...d, modalChangeNodes: nodes, transportLegs: legs });
+}
+
+function supplyChainDiagramRemoveB(dIn, i) {
+  const d = normalizeSupplyChainDiagram(dIn);
+  const nodes = [...d.modalChangeNodes];
+  const legs = [...d.transportLegs];
+  if (i < 0 || i >= nodes.length) return d;
+  if (nodes.length === 1) {
+    return normalizeSupplyChainDiagram({
+      ...d,
+      modalChangeNodes: [],
+      transportLegs: [{ modeKey: "", otherDetail: "" }]
+    });
+  }
+  nodes.splice(i, 1);
+  legs.splice(i + 1, 1);
+  return normalizeSupplyChainDiagram({ ...d, modalChangeNodes: nodes, transportLegs: legs });
+}
+
+function supplyChainLocationSelectHtml(selectedKey) {
+  const opts = [`<option value="">Select…</option>`]
+    .concat(
+      SUPPLY_CHAIN_LOCATION_OPTIONS.map((o) => {
+        const sel = o.key === selectedKey ? " selected" : "";
+        return `<option value="${escapeHtml(o.key)}"${sel}>${escapeHtml(o.label)}</option>`;
+      })
+    )
+    .join("");
+  return opts;
+}
+
+function supplyChainModalSelectHtml(selectedKey, allowedKeys = null) {
+  const opts = [`<option value="">Select…</option>`]
+    .concat(
+      SUPPLY_CHAIN_MODAL_CHANGE_OPTIONS.map((o) => {
+        if (allowedKeys && !allowedKeys.has(o.key)) return "";
+        const sel = o.key === selectedKey ? " selected" : "";
+        return `<option value="${escapeHtml(o.key)}"${sel}>${escapeHtml(o.label)}</option>`;
+      })
+    )
+    .join("");
+  return opts;
+}
+
+function supplyChainTransportSelectHtml(selectedKey, allowedKeys = null) {
+  const opts = [`<option value="">Mode…</option>`]
+    .concat(
+      SUPPLY_CHAIN_TRANSPORT_MODE_OPTIONS.map((o) => {
+        if (allowedKeys && !allowedKeys.has(o.key)) return "";
+        const sel = o.key === selectedKey ? " selected" : "";
+        return `<option value="${escapeHtml(o.key)}"${sel}>${escapeHtml(o.label)}</option>`;
+      })
+    )
+    .join("");
+  return opts;
+}
+
+function formatOriginLabelForSupplyChainABranch(b) {
+  if (!b?.originCategoryKey || b.originCategoryKey === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) return "—";
+  const opt = RAW_MATERIAL_ORIGIN_OPTIONS.find((o) => o.key === b.originCategoryKey);
+  if (b.originCategoryKey === "other") {
+    const d = String(b.originOtherDetail ?? "").trim();
+    return d ? `Others (${escapeHtml(d)})` : "Others";
+  }
+  return opt ? escapeHtml(opt.label) : escapeHtml(String(b.originCategoryKey));
+}
+
+function originIconSrcForSupplyChain(b) {
+  const k = b?.originCategoryKey;
+  if (!k || k === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) return ORIGIN_TYPE_ICONS.storage_facility;
+  return ORIGIN_TYPE_ICONS[k] ?? ORIGIN_TYPE_ICONS.storage_facility;
+}
+
+function collectSupplyChainDiagramFromMount(materialIndex) {
+  const mount = document.getElementById("rawMaterialSupplyChainDiagramMount");
+  if (!mount) return null;
+  ensureRawMaterialBranchesAligned();
+  const br = state.industry.rawMaterialBranches[materialIndex];
+  if (!br) return null;
+  const destCat = mount.querySelector('[data-sc="destination-category"]')?.value ?? "";
+  const destOther = mount.querySelector('[data-sc="destination-other"]')?.value ?? "";
+  const modalSels = [...mount.querySelectorAll("[data-sc-modal-node]")].sort(
+    (a, b) =>
+      Number(a.getAttribute("data-sc-modal-node")) - Number(b.getAttribute("data-sc-modal-node"))
+  );
+  const nodes = modalSels.map((sel) => {
+    const ni = Number(sel.getAttribute("data-sc-modal-node"));
+    const mk = String(sel.value ?? "").trim();
+    const ot = mount.querySelector(`[data-sc-modal-other="${ni}"]`);
+    return {
+      modalChangeKey: normalizeModalChangeKey(mk),
+      otherDetail: String(ot?.value ?? "")
+    };
+  });
+  const legCount = nodes.length + 1;
+  const legs = [];
+  for (let li = 0; li < legCount; li++) {
+    const sel = mount.querySelector(`[data-sc-transport-leg="${li}"]`);
+    const mode = String(sel?.value ?? "").trim();
+    const ot = mount.querySelector(`[data-sc-transport-other="${li}"]`);
+    legs.push({
+      modeKey: normalizeTransportModeKey(mode),
+      otherDetail: String(ot?.value ?? "")
+    });
+  }
+  const normalized = normalizeSupplyChainDiagram({
+    destinationCategoryKey: destCat,
+    destinationOtherDetail: destOther,
+    modalChangeNodes: nodes,
+    transportLegs: legs
+  });
+  return applySupplyChainDiagramConstraints(normalized);
+}
+
+/** Green segment from horizontal center of A dot to horizontal center of C dot (relative to `.supplyChainDiagram__flow`). */
+function positionSupplyChainDiagramTrack(mountEl) {
+  if (!mountEl) return;
+  const flow = mountEl.querySelector(".supplyChainDiagram__flow");
+  const track = mountEl.querySelector(".supplyChainDiagram__track");
+  const dotA = mountEl.querySelector(".supplyChainDiagram__row--a .supplyChainDiagram__nodeDot");
+  const dotC = mountEl.querySelector(".supplyChainDiagram__row--c .supplyChainDiagram__nodeDot");
+  if (!flow || !track) return;
+  if (!dotA || !dotC) {
+    track.style.display = "none";
+    return;
+  }
+  const fr = flow.getBoundingClientRect();
+  const ar = dotA.getBoundingClientRect();
+  const cr = dotC.getBoundingClientRect();
+  const yA = ar.top + ar.height / 2 - fr.top;
+  const yC = cr.top + cr.height / 2 - fr.top;
+  const topPx = Math.min(yA, yC);
+  const heightPx = Math.max(1, Math.abs(yC - yA));
+  const cxA = ar.left + ar.width / 2 - fr.left;
+  const cxC = cr.left + cr.width / 2 - fr.left;
+  const cx = (cxA + cxC) / 2;
+  track.style.display = "block";
+  track.style.left = `${cx - 2}px`;
+  track.style.top = `${topPx}px`;
+  track.style.height = `${heightPx}px`;
+}
+
+function bindSupplyChainDiagramTrackLayout(mountEl) {
+  if (!mountEl || mountEl.dataset.supplyChainTrackLayoutBound === "1") return;
+  mountEl.dataset.supplyChainTrackLayoutBound = "1";
+  const ro = new ResizeObserver(() => {
+    positionSupplyChainDiagramTrack(mountEl);
+  });
+  ro.observe(mountEl);
+  window.addEventListener(
+    "resize",
+    () => {
+      positionSupplyChainDiagramTrack(mountEl);
+    },
+    { passive: true }
+  );
+}
+
+function renderSupplyChainDiagramMount(materialIndex) {
+  const mount = document.getElementById("rawMaterialSupplyChainDiagramMount");
+  if (!mount) return;
+  ensureRawMaterialBranchesAligned();
+  const br = state.industry.rawMaterialBranches[materialIndex];
+  if (!br) return;
+  let d = applySupplyChainDiagramConstraints(br.supplyChainDiagram ?? defaultSupplyChainDiagram());
+  br.supplyChainDiagram = d;
+  const nodes = d.modalChangeNodes;
+  const legs = d.transportLegs;
+  const matLabel = String(state.industry.rawMaterials[materialIndex] ?? "").trim() || "this material";
+  const originSummary = formatOriginLabelForSupplyChainABranch(br);
+  const originIcon = originIconSrcForSupplyChain(br);
+
+  const parts = [];
+  parts.push(`<div class="supplyChainDiagram__flow">`);
+  parts.push(`<div class="supplyChainDiagram__track" aria-hidden="true"></div>`);
+  parts.push(`<div class="supplyChainDiagram__flowInner">`);
+
+  // A — mirrored from first branch (read-only)
+  parts.push(`<div class="supplyChainDiagram__row supplyChainDiagram__row--a">`);
+  parts.push(`<div class="supplyChainDiagram__nodeDot" aria-hidden="true">A</div>`);
+  parts.push(`<div class="supplyChainDiagram__fields">`);
+  parts.push(`<div class="supplyChainDiagram__fieldLabel">Originating Location</div>`);
+  parts.push(
+    `<div class="supplyChainDiagram__readonly"><img class="supplyChainDiagram__icon" src="${originIcon}" alt=""/> <span>${originSummary}</span></div>`
+  );
+  parts.push(`<p class="supplyChainDiagram__hint">Same as your answer for where ${escapeHtml(matLabel)} originates.</p>`);
+  parts.push(`</div></div>`);
+
+  // Transport legs and B nodes: leg[0] … leg[n] for n nodes
+  for (let ni = 0; ni <= nodes.length; ni++) {
+    const leg = legs[ni] ?? { modeKey: "", otherDetail: "" };
+    const legIdx = ni;
+    const requiredMode = legIdx > 0 ? modalChangeToMode(nodes[legIdx - 1]?.modalChangeKey) : null;
+    const legAllowed = requiredMode
+      ? new Set([requiredMode])
+      : null;
+    const showTOther = leg.modeKey === "other";
+    const tlab = `Transportation ${ni + 1}`;
+    parts.push(`<div class="supplyChainDiagram__row supplyChainDiagram__row--transport">`);
+    parts.push(`<div class="supplyChainDiagram__trackPad" aria-hidden="true"></div>`);
+    parts.push(`<div class="supplyChainDiagram__fields">`);
+    parts.push(`<div class="supplyChainDiagram__fieldLabel">${escapeHtml(tlab)}</div>`);
+    parts.push(
+      `<select class="goodsGate__input supplyChainDiagram__select" data-sc-transport-leg="${legIdx}" aria-label="${escapeHtml(
+        tlab
+      )} mode"${requiredMode ? " disabled" : ""}>`
+    );
+    parts.push(supplyChainTransportSelectHtml(leg.modeKey, legAllowed));
+    parts.push(`</select>`);
+    parts.push(
+      `<div class="goodsOtherWrap supplyChainDiagram__otherWrap${showTOther ? "" : " is-hidden"}" data-sc-transport-other-wrap="${legIdx}">`
+    );
+    parts.push(`<input type="text" class="goodsGate__input" data-sc-transport-other="${legIdx}" maxlength="300" placeholder="Specify mode" value="${escapeHtml(leg.otherDetail)}" />`);
+    parts.push(`</div>`);
+    parts.push(
+      `<div class="supplyChainDiagram__inlineActions"><button type="button" class="supplyChainDiagram__iconBtn" data-sc-add-after-leg="${legIdx}" title="Add transportation mode change">+</button></div>`
+    );
+    parts.push(`</div></div>`);
+
+    if (ni < nodes.length) {
+      const node = nodes[ni] ?? { modalChangeKey: "", otherDetail: "" };
+      const showMOther = node.modalChangeKey === "other";
+      const bLabel = nodes.length <= 1 ? "B" : `B${ni + 1}`;
+      const incomingMode = legs[ni]?.modeKey ?? "";
+      const allowedModal = allowedModalChangeKeysForIncomingMode(incomingMode);
+      parts.push(`<div class="supplyChainDiagram__row supplyChainDiagram__row--b">`);
+      parts.push(`<div class="supplyChainDiagram__nodeDot supplyChainDiagram__nodeDot--b" aria-hidden="true">${escapeHtml(bLabel)}</div>`);
+      parts.push(`<div class="supplyChainDiagram__fields">`);
+      parts.push(`<div class="supplyChainDiagram__fieldLabel">Transportation Mode Change</div>`);
+      parts.push(
+        `<select class="goodsGate__input supplyChainDiagram__select" data-sc-modal-node="${ni}" aria-label="Mode change ${ni + 1}">`
+      );
+      parts.push(supplyChainModalSelectHtml(node.modalChangeKey, allowedModal));
+      parts.push(`</select>`);
+      parts.push(
+        `<div class="goodsOtherWrap supplyChainDiagram__otherWrap${showMOther ? "" : " is-hidden"}" data-sc-modal-other-wrap="${ni}">`
+      );
+      parts.push(
+        `<input type="text" class="goodsGate__input" data-sc-modal-other="${ni}" maxlength="300" placeholder="Specify" value="${escapeHtml(node.otherDetail)}" />`
+      );
+      parts.push(`</div>`);
+      parts.push(
+        `<div class="supplyChainDiagram__inlineActions"><button type="button" class="supplyChainDiagram__iconBtn supplyChainDiagram__iconBtn--minus" data-sc-remove-b="${ni}" title="Remove this step">−</button></div>`
+      );
+      parts.push(`</div></div>`);
+    }
+  }
+
+  // C — destination
+  const dk = d.destinationCategoryKey;
+  const showDOther = dk === "other";
+  parts.push(`<div class="supplyChainDiagram__row supplyChainDiagram__row--c">`);
+  parts.push(`<div class="supplyChainDiagram__nodeDot" aria-hidden="true">C</div>`);
+  parts.push(`<div class="supplyChainDiagram__fields">`);
+  parts.push(`<div class="supplyChainDiagram__fieldLabel">Destination</div>`);
+  parts.push(
+    `<select class="goodsGate__input supplyChainDiagram__select" data-sc="destination-category" aria-label="Destination">`
+  );
+  parts.push(supplyChainLocationSelectHtml(dk));
+  parts.push(`</select>`);
+  parts.push(
+    `<div class="goodsOtherWrap supplyChainDiagram__otherWrap${showDOther ? "" : " is-hidden"}" data-sc-dest-other-wrap>`
+  );
+  parts.push(
+    `<input type="text" class="goodsGate__input" data-sc="destination-other" maxlength="300" placeholder="Specify destination" value="${escapeHtml(d.destinationOtherDetail)}" />`
+  );
+  parts.push(`</div>`);
+  parts.push(`</div></div>`);
+
+  parts.push(`</div></div>`);
+
+  mount.innerHTML = parts.join("");
+
+  const applyDiagram = (nextD) => {
+    ensureRawMaterialBranchesAligned();
+    const row = state.industry.rawMaterialBranches[materialIndex];
+    if (!row) return;
+    row.supplyChainDiagram = applySupplyChainDiagramConstraints(nextD);
+    renderSupplyChainDiagramMount(materialIndex);
+  };
+
+  /** Merge current form fields from the DOM into state before changing structure. */
+  function snapshotDiagramFromDomOrState() {
+    const fromDom = collectSupplyChainDiagramFromMount(materialIndex);
+    if (fromDom) return fromDom;
+    const row = state.industry.rawMaterialBranches[materialIndex];
+    return row?.supplyChainDiagram
+      ? applySupplyChainDiagramConstraints(row.supplyChainDiagram)
+      : applySupplyChainDiagramConstraints(defaultSupplyChainDiagram());
+  }
+
+  mount.querySelectorAll("[data-sc-transport-leg]").forEach((sel) => {
+    sel.addEventListener("change", () => {
+      const next = snapshotDiagramFromDomOrState();
+      applyDiagram(next);
+    });
+  });
+  mount.querySelectorAll("[data-sc-modal-node]").forEach((sel) => {
+    sel.addEventListener("change", () => {
+      const next = snapshotDiagramFromDomOrState();
+      applyDiagram(next);
+    });
+  });
+  const destSel = mount.querySelector('[data-sc="destination-category"]');
+  destSel?.addEventListener("change", () => {
+    const next = snapshotDiagramFromDomOrState();
+    applyDiagram(next);
+  });
+
+  mount.querySelectorAll("[data-sc-add-after-leg]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      applyDiagram(supplyChainDiagramAddB(snapshotDiagramFromDomOrState()));
+    });
+  });
+  mount.querySelectorAll("[data-sc-remove-b]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const bi = Number(btn.getAttribute("data-sc-remove-b"));
+      applyDiagram(supplyChainDiagramRemoveB(snapshotDiagramFromDomOrState(), bi));
+    });
+  });
+
+  bindSupplyChainDiagramTrackLayout(mount);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => positionSupplyChainDiagramTrack(mount));
+  });
+}
+
+function openRawMaterialSupplyChainDiagramGate(materialIndex) {
+  const gate = document.getElementById("rawMaterialSupplyChainDiagramGate");
+  if (!gate) return;
+  document.getElementById("rawMaterialSupplyChainIntroGate")?.classList.remove("is-open");
+  document.getElementById("rawMaterialOriginGate")?.classList.remove("is-open");
+  ui.rawMaterialBranchMap = null;
+  ui.rawMaterialOriginEditingIndex = null;
+  ui.rawMaterialSupplyChainIntroIndex = null;
+  ensureRawMaterialBranchesAligned();
+  const br = state.industry.rawMaterialBranches[materialIndex];
+  if (!br || br.originCategoryKey === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) return;
+  br.supplyChainDiagram = applySupplyChainDiagramConstraints(br.supplyChainDiagram ?? defaultSupplyChainDiagram());
+  ui.rawMaterialSupplyChainDiagramIndex = materialIndex;
+  const badge = document.getElementById("rawMaterialSupplyChainDiagramBadge");
+  const titleEl = document.getElementById("rawMaterialSupplyChainDiagramTitle");
+  const matName = String(state.industry.rawMaterials[materialIndex] ?? "").trim() || "this material";
+  if (badge) badge.textContent = matName;
+  if (titleEl) {
+    titleEl.textContent = `Please Provide the Supply Chain Information of ${matName}`;
+  }
+  gate.classList.add("is-open");
+  renderSupplyChainDiagramMount(materialIndex);
+  syncParticipantMapGateOverlay();
+  requestAnimationFrame(() => {
+    positionSupplyChainDiagramTrack(document.getElementById("rawMaterialSupplyChainDiagramMount"));
+    document.getElementById("rawMaterialSupplyChainDiagramSaveBtn")?.focus();
+  });
+}
+
+function openRawMaterialSupplyChainIntroGate(materialIndex) {
+  const gate = document.getElementById("rawMaterialSupplyChainIntroGate");
+  const titleEl = document.getElementById("rawMaterialSupplyChainIntroTitle");
+  if (!gate) return;
+  document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.remove("is-open");
+  document.getElementById("rawMaterialOriginGate")?.classList.remove("is-open");
+  ui.rawMaterialSupplyChainDiagramIndex = null;
+  ui.rawMaterialBranchMap = null;
+  ui.rawMaterialOriginEditingIndex = null;
+  const matName = String(state.industry.rawMaterials[materialIndex] ?? "").trim() || "this material";
+  if (titleEl) {
+    titleEl.textContent = `Now Please provide some information about the supply chain of ${matName}`;
+  }
+  ui.rawMaterialSupplyChainIntroIndex = materialIndex;
+  gate.classList.add("is-open");
+  syncParticipantMapGateOverlay();
+  requestAnimationFrame(() => document.getElementById("rawMaterialSupplyChainIntroContinueBtn")?.focus());
+}
+
 function openRawMaterialOriginQuestionGate(materialIndex) {
   const gate = document.getElementById("rawMaterialOriginGate");
   const titleEl = document.getElementById("rawMaterialOriginGateTitle");
   if (!gate) return;
+  document.getElementById("rawMaterialSupplyChainIntroGate")?.classList.remove("is-open");
+  document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.remove("is-open");
+  ui.rawMaterialSupplyChainIntroIndex = null;
+  ui.rawMaterialSupplyChainDiagramIndex = null;
   const matName = String(state.industry.rawMaterials[materialIndex] ?? "").trim() || "this material";
   if (titleEl) {
     titleEl.textContent = `Where does ${matName} originate?`;
@@ -2365,6 +3016,76 @@ function initParticipantRawMaterialOriginMapSkipOnce() {
   if (!btn) return;
   document.body.dataset.participantRawMaterialMapSkipBound = "1";
   btn.addEventListener("click", () => skipRawMaterialOriginMap());
+}
+
+function initParticipantRawMaterialSupplyChainDiagramOnce() {
+  if (SURVEY_MODE !== "participant" || document.body.dataset.participantRawMaterialDiagramBound === "1") {
+    return;
+  }
+  const gate = document.getElementById("rawMaterialSupplyChainDiagramGate");
+  const btn = document.getElementById("rawMaterialSupplyChainDiagramSaveBtn");
+  if (!gate || !btn) return;
+  document.body.dataset.participantRawMaterialDiagramBound = "1";
+  btn.addEventListener("click", () => {
+    if (readOnly) return;
+    const idx = ui.rawMaterialSupplyChainDiagramIndex;
+    if (idx == null || idx < 0) return;
+    let collected = collectSupplyChainDiagramFromMount(idx);
+    if (!collected) return;
+    collected = applySupplyChainDiagramConstraints(collected);
+    if (!isSupplyChainDiagramComplete(collected)) {
+      window.alert('Please complete all fields in the diagram, including any "Others" detail.');
+      return;
+    }
+    ensureRawMaterialBranchesAligned();
+    state.industry.rawMaterialBranches[idx] = {
+      ...state.industry.rawMaterialBranches[idx],
+      supplyChainDiagram: collected
+    };
+    gate.classList.remove("is-open");
+    ui.rawMaterialSupplyChainDiagramIndex = null;
+    void flushSaveToServer();
+    rebuildFromState();
+    uiUpdateStats();
+    syncParticipantMapGateOverlay();
+    resumeRawMaterialBranchFlow();
+    if (!participantRawMaterialBranchWorkIncomplete()) {
+      setParticipantMapHintAfterIndustryGate();
+      void flushSaveToServer();
+    }
+    if (map) {
+      requestAnimationFrame(() => map.invalidateSize());
+      setTimeout(() => map.invalidateSize(), 200);
+    }
+  });
+}
+
+function initParticipantRawMaterialSupplyChainIntroOnce() {
+  if (SURVEY_MODE !== "participant" || document.body.dataset.participantRawMaterialSupplyIntroBound === "1") {
+    return;
+  }
+  const gate = document.getElementById("rawMaterialSupplyChainIntroGate");
+  const btn = document.getElementById("rawMaterialSupplyChainIntroContinueBtn");
+  if (!gate || !btn) return;
+  document.body.dataset.participantRawMaterialSupplyIntroBound = "1";
+  btn.addEventListener("click", () => {
+    const idx = ui.rawMaterialSupplyChainIntroIndex;
+    if (idx == null || idx < 0) return;
+    ensureRawMaterialBranchesAligned();
+    state.industry.rawMaterialBranches[idx] = {
+      ...state.industry.rawMaterialBranches[idx],
+      supplyChainIntroAcknowledged: true
+    };
+    gate.classList.remove("is-open");
+    ui.rawMaterialSupplyChainIntroIndex = null;
+    void flushSaveToServer();
+    syncParticipantMapGateOverlay();
+    openRawMaterialOriginQuestionGate(idx);
+    if (map) {
+      requestAnimationFrame(() => map.invalidateSize());
+      setTimeout(() => map.invalidateSize(), 200);
+    }
+  });
 }
 
 function initParticipantRawMaterialOriginGateOnce() {
@@ -2472,6 +3193,8 @@ async function finishParticipantBoot() {
   initParticipantRoleGateOnce();
   initParticipantGoodsGateOnce();
   initParticipantRawMaterialsGateOnce();
+  initParticipantRawMaterialSupplyChainIntroOnce();
+  initParticipantRawMaterialSupplyChainDiagramOnce();
   initParticipantRawMaterialOriginGateOnce();
   initParticipantRawMaterialOriginMapSkipOnce();
 

@@ -499,6 +499,8 @@ html.participant-welcome-ok #welcomeGate {
 #roleGate.roleGate--floating.is-open,
 #goodsGate.goodsGate--floating.is-open,
 #rawMaterialsGate.rawMaterialsGate--floating.is-open,
+#rawMaterialSupplyChainIntroGate.rawMaterialSupplyChainIntroGate--floating.is-open,
+#rawMaterialSupplyChainDiagramGate.rawMaterialSupplyChainDiagramGate--floating.is-open,
 #rawMaterialOriginGate.rawMaterialOriginGate--floating.is-open {
   display: flex;
 }
@@ -506,6 +508,8 @@ html.participant-welcome-ok #welcomeGate {
 #roleGate.roleGate--floating,
 #goodsGate.goodsGate--floating,
 #rawMaterialsGate.rawMaterialsGate--floating,
+#rawMaterialSupplyChainIntroGate.rawMaterialSupplyChainIntroGate--floating,
+#rawMaterialSupplyChainDiagramGate.rawMaterialSupplyChainDiagramGate--floating,
 #rawMaterialOriginGate.rawMaterialOriginGate--floating {
   display: none;
   position: absolute;
@@ -523,12 +527,182 @@ html.participant-welcome-ok #welcomeGate {
 #roleGate.roleGate--floating .roleGate__card,
 #goodsGate.goodsGate--floating .goodsGate__card,
 #rawMaterialsGate.rawMaterialsGate--floating .rawMaterialsGate__card,
+#rawMaterialSupplyChainIntroGate.rawMaterialSupplyChainIntroGate--floating
+  .rawMaterialSupplyChainIntroGate__card,
+#rawMaterialSupplyChainDiagramGate.rawMaterialSupplyChainDiagramGate--floating .supplyChainDiagramGate__card,
 #rawMaterialOriginGate.rawMaterialOriginGate--floating .rawMaterialOriginGate__card {
   max-width: 420px;
   width: 100%;
   padding: 18px 20px;
   pointer-events: auto;
   box-shadow: 0 12px 40px rgba(15, 23, 42, 0.18);
+}
+
+#rawMaterialSupplyChainDiagramGate.rawMaterialSupplyChainDiagramGate--floating .supplyChainDiagramGate__card {
+  max-width: min(560px, calc(100vw - 32px));
+  max-height: min(88vh, 900px);
+  overflow-y: auto;
+}
+
+.supplyChainDiagramGate__title {
+  margin: 0 0 8px;
+  font-size: 1.45rem;
+  line-height: 1.3;
+  font-weight: 700;
+  color: var(--text);
+  text-align: center;
+}
+
+.supplyChainDiagramGate__intro {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.supplyChainDiagram__rmBadge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(51, 65, 85, 0.12);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.supplyChainDiagramMount {
+  margin-top: 4px;
+}
+
+.supplyChainDiagram__flow {
+  position: relative;
+  margin: 0;
+  padding: 4px 0 8px;
+  /* Stack content above the segment line (line is positioned in JS from A to C). */
+  z-index: 0;
+}
+
+.supplyChainDiagram__track {
+  display: none;
+  position: absolute;
+  width: 4px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: #15803d;
+  pointer-events: none;
+  z-index: 0;
+  box-sizing: border-box;
+}
+
+.supplyChainDiagram__flowInner {
+  --sc-track-width: 4px;
+  --sc-track-pad-left: 16px;
+  /* Horizontal distance from content start to center of the green track (padding + half track). */
+  --sc-line-center-x: calc(-1 * (var(--sc-track-pad-left) + var(--sc-track-width) / 2));
+  position: relative;
+  z-index: 1;
+  margin-left: 14px;
+  padding-left: var(--sc-track-pad-left);
+}
+
+.supplyChainDiagram__row {
+  position: relative;
+  margin-bottom: 16px;
+}
+
+.supplyChainDiagram__row--transport .supplyChainDiagram__trackPad {
+  display: none;
+}
+
+.supplyChainDiagram__nodeDot {
+  position: absolute;
+  /* Center of circle on the vertical track (matches --sc-line-center-x above). */
+  left: var(--sc-line-center-x);
+  top: 4px;
+  transform: translateX(-50%);
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #a16207, #78350f);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  z-index: 2;
+}
+
+.supplyChainDiagram__nodeDot--b {
+  background: linear-gradient(145deg, #a16207, #78350f);
+}
+
+.supplyChainDiagram__fieldLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.supplyChainDiagram__select {
+  width: 100%;
+  max-width: 100%;
+}
+
+.supplyChainDiagram__readonly {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(241, 245, 249, 0.9);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.supplyChainDiagram__icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.supplyChainDiagram__hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.supplyChainDiagram__inlineActions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.supplyChainDiagram__iconBtn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: #f8fafc;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.supplyChainDiagram__iconBtn:hover {
+  background: #fff;
+}
+
+.supplyChainDiagram__iconBtn--minus {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.35);
 }
 
 .industryGate__title {
@@ -782,6 +956,15 @@ html.participant-welcome-ok #welcomeGate {
 
 .rawMaterialsAddBtn {
   margin-bottom: 8px;
+}
+
+.rawMaterialSupplyChainIntroGate__title {
+  margin: 0 0 16px;
+  font-size: 1.05rem;
+  line-height: 1.45;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text);
 }
 
 .rawMaterialOriginGate__title {
