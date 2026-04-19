@@ -140,6 +140,7 @@ function normalizeRawMaterialBranchesFromPayload(rawMaterials, branchesIn) {
     else if (RAW_MATERIAL_ORIGIN_KEYS.has(key)) originCategoryKey = key;
     const ox = b.originX;
     const oy = b.originY;
+    const diagram = normalizeSupplyChainDiagram(b.supplyChainDiagram);
     out.push({
       originCategoryKey,
       originOtherDetail: String(b.originOtherDetail ?? ""),
@@ -147,7 +148,8 @@ function normalizeRawMaterialBranchesFromPayload(rawMaterials, branchesIn) {
       originY: typeof oy === "number" && Number.isFinite(oy) ? oy : null,
       originMapSkipped: Boolean(b.originMapSkipped),
       supplyChainIntroAcknowledged: Boolean(b.supplyChainIntroAcknowledged),
-      supplyChainDiagram: normalizeSupplyChainDiagram(b.supplyChainDiagram)
+      supplyChainDiagram: diagram,
+      supplyChainTransportRoutes: normalizeSupplyChainTransportRoutesForBranch(b.supplyChainTransportRoutes, diagram)
     });
   }
   return out;
@@ -161,6 +163,7 @@ function ensureRawMaterialBranchesAligned() {
   for (let i = 0; i < mats.length; i++) {
     const prev = branches[i];
     if (prev && typeof prev === "object") {
+      const diagram = normalizeSupplyChainDiagram(prev.supplyChainDiagram ?? defaultSupplyChainDiagram());
       next.push({
         originCategoryKey: String(prev.originCategoryKey ?? ""),
         originOtherDetail: String(prev.originOtherDetail ?? ""),
@@ -168,9 +171,14 @@ function ensureRawMaterialBranchesAligned() {
         originY: typeof prev.originY === "number" && Number.isFinite(prev.originY) ? prev.originY : null,
         originMapSkipped: Boolean(prev.originMapSkipped),
         supplyChainIntroAcknowledged: Boolean(prev.supplyChainIntroAcknowledged),
-        supplyChainDiagram: normalizeSupplyChainDiagram(prev.supplyChainDiagram ?? defaultSupplyChainDiagram())
+        supplyChainDiagram: diagram,
+        supplyChainTransportRoutes: normalizeSupplyChainTransportRoutesForBranch(
+          prev.supplyChainTransportRoutes,
+          diagram
+        )
       });
     } else {
+      const diagram = defaultSupplyChainDiagram();
       next.push({
         originCategoryKey: "",
         originOtherDetail: "",
@@ -178,7 +186,8 @@ function ensureRawMaterialBranchesAligned() {
         originY: null,
         originMapSkipped: false,
         supplyChainIntroAcknowledged: false,
-        supplyChainDiagram: defaultSupplyChainDiagram()
+        supplyChainDiagram: diagram,
+        supplyChainTransportRoutes: normalizeSupplyChainTransportRoutesForBranch([], diagram)
       });
     }
   }
@@ -392,6 +401,247 @@ function rawMaterialSupplyChainBranchNeedsDiagramGate(b) {
   if (b.originCategoryKey === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) return false;
   if (rawMaterialOriginBranchNeedsCategoryGate(b) || rawMaterialOriginBranchNeedsMap(b)) return false;
   return !isSupplyChainDiagramComplete(b.supplyChainDiagram);
+}
+
+function normalizeSupplyChainTransportRoutesForBranch(raw, diagram) {
+  const d = normalizeSupplyChainDiagram(diagram ?? defaultSupplyChainDiagram());
+  const n = d.transportLegs.length;
+  const arr = Array.isArray(raw) ? raw : [];
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const leg = arr[i];
+    const pts = Array.isArray(leg?.points) ? leg.points : [];
+    const cleaned = pts
+      .filter(
+        (p) =>
+          Array.isArray(p) &&
+          p.length >= 2 &&
+          Number.isFinite(Number(p[0])) &&
+          Number.isFinite(Number(p[1]))
+      )
+      .map((p) => [Number(p[0]), Number(p[1])]);
+    out.push({ points: cleaned });
+  }
+  return out;
+}
+
+function isSupplyChainTransportRoutesComplete(b) {
+  if (!b?.supplyChainDiagram) return false;
+  const d = normalizeSupplyChainDiagram(b.supplyChainDiagram);
+  const routes = normalizeSupplyChainTransportRoutesForBranch(b.supplyChainTransportRoutes, b.supplyChainDiagram);
+  const n = d.transportLegs.length;
+  if (routes.length < n) return false;
+  for (let i = 0; i < n; i++) {
+    const pts = routes[i]?.points;
+    if (!Array.isArray(pts) || pts.length < 2) return false;
+  }
+  return true;
+}
+
+/** After the supply-chain diagram is complete: draw each transportation leg on the map. */
+function rawMaterialSupplyChainBranchNeedsTransportRoutes(b) {
+  if (!b) return false;
+  if (b.originCategoryKey === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) return false;
+  if (rawMaterialOriginBranchNeedsCategoryGate(b) || rawMaterialOriginBranchNeedsMap(b)) return false;
+  if (!isSupplyChainDiagramComplete(b.supplyChainDiagram)) return false;
+  return !isSupplyChainTransportRoutesComplete(b);
+}
+
+function supplyChainTransportKeyToRouteBaseKey(k) {
+  const m = normalizeTransportModeKey(k);
+  if (m === "huge_truck") return "huge";
+  if (m === "small_truck") return "small";
+  if (m === "train") return "train";
+  return "small";
+}
+
+function getSupplyChainTransportRouteColor(modeKey) {
+  const base = supplyChainTransportKeyToRouteBaseKey(modeKey);
+  return getSegmentColor("current", { modeKey: base });
+}
+
+function formatSupplyChainTransportModeLabel(leg) {
+  const m = normalizeTransportModeKey(leg?.modeKey);
+  if (m === "other") return String(leg?.otherDetail ?? "").trim() || "Other";
+  const opt = SUPPLY_CHAIN_TRANSPORT_MODE_OPTIONS.find((o) => o.key === m);
+  return opt ? opt.label : m;
+}
+
+function getSupplyChainRouteStartLatLng(branch, legIndex) {
+  if (legIndex === 0) {
+    if (typeof branch?.originX !== "number" || typeof branch?.originY !== "number") return null;
+    return epsg2263XYToLatLng(branch.originX, branch.originY);
+  }
+  const routes = normalizeSupplyChainTransportRoutesForBranch(branch?.supplyChainTransportRoutes, branch?.supplyChainDiagram);
+  const prev = routes[legIndex - 1]?.points;
+  if (!Array.isArray(prev) || prev.length < 1) return null;
+  const last = prev[prev.length - 1];
+  return epsg2263XYToLatLng(last[0], last[1]);
+}
+
+function resetSupplyChainRouteDraft() {
+  if (layers?.supplyChainDraft) layers.supplyChainDraft.clearLayers();
+  ui.rawMaterialSupplyChainRouteDrawing = null;
+}
+
+function supplyChainRouteConfirmLabel(d, legIndex) {
+  const nodes = d.modalChangeNodes ?? [];
+  const last = legIndex >= (d.transportLegs?.length ?? 0) - 1;
+  if (last) return "This is Destination";
+  const bLab = nodes.length <= 1 ? "B" : `B${legIndex + 1}`;
+  return `This is Transportation Mode Change ${bLab}`;
+}
+
+function refreshSupplyChainRouteDraftVisuals() {
+  const dr = ui.rawMaterialSupplyChainRouteDrawing;
+  if (!dr || !layers?.supplyChainDraft) return;
+  layers.supplyChainDraft.clearLayers();
+  const row = state.industry.rawMaterialBranches[dr.materialIndex];
+  const d = normalizeSupplyChainDiagram(row?.supplyChainDiagram);
+  const color = getSupplyChainTransportRouteColor(dr.modeKey);
+  const dashStyle = { color, weight: 5, opacity: 0.92, dashArray: "7 5" };
+  if (dr.points.length >= 2) {
+    L.polyline(dr.points, dashStyle).addTo(layers.supplyChainDraft);
+  }
+  if (dr.points.length === 1) {
+    L.circleMarker(dr.points[0], { radius: 6, color, weight: 2, fillColor: "#fff", fillOpacity: 0.95 }).addTo(
+      layers.supplyChainDraft
+    );
+  }
+  const labelText = supplyChainRouteConfirmLabel(d, dr.legIndex);
+  if (dr.points.length >= 2) {
+    const end = dr.points[dr.points.length - 1];
+    const icon = L.divIcon({
+      className: "supplyChainRouteConfirmWrap",
+      html: `<div class="supplyChainRouteConfirmStack"><div class="supplyChainRouteConfirm"><span class="supplyChainRouteConfirm__text">${escapeHtml(
+        labelText
+      )}</span><button type="button" class="supplyChainRouteConfirm__btn" data-sc-route-confirm title="Confirm this stop">√</button></div><div class="supplyChainRouteUndoRow"><button type="button" class="supplyChainRouteUndoRow__btn" data-sc-route-undo-last title="Remove last point">−</button><span class="supplyChainRouteUndoRow__label">Remove Last Point</span></div></div>`,
+      iconSize: [300, 136],
+      iconAnchor: [150, 136]
+    });
+    const mk = L.marker(end, { icon, zIndexOffset: 700 });
+    mk.addTo(layers.supplyChainDraft);
+    requestAnimationFrame(() => {
+      const el = mk.getElement();
+      const undoBtn = el?.querySelector("[data-sc-route-undo-last]");
+      undoBtn?.addEventListener("click", (e) => {
+        L.DomEvent.stopPropagation(e);
+        L.DomEvent.preventDefault(e);
+        popLastSupplyChainRoutePoint();
+      });
+      const btn = el?.querySelector("[data-sc-route-confirm]");
+      btn?.addEventListener("click", (e) => {
+        L.DomEvent.stopPropagation(e);
+        L.DomEvent.preventDefault(e);
+        finishSupplyChainTransportRouteLegAndContinue();
+      });
+      mk.on("click", (e) => L.DomEvent.stopPropagation(e));
+    });
+  }
+}
+
+function appendSupplyChainTransportRoutePoint(latlng) {
+  const dr = ui.rawMaterialSupplyChainRouteDrawing;
+  if (!dr) return;
+  dr.points.push(latlng);
+  const [x, y] = gpsToEPSG2263(latlng.lng, latlng.lat);
+  dr.points2263.push([x, y]);
+  refreshSupplyChainRouteDraftVisuals();
+  setParticipantMapHintAfterIndustryGate();
+}
+
+/** Remove the last clicked point; the automatic start point (index 0) is kept. */
+function popLastSupplyChainRoutePoint() {
+  const dr = ui.rawMaterialSupplyChainRouteDrawing;
+  if (!dr || dr.points.length <= 1) return;
+  dr.points.pop();
+  dr.points2263.pop();
+  refreshSupplyChainRouteDraftVisuals();
+  setParticipantMapHintAfterIndustryGate();
+}
+
+function finishSupplyChainTransportRouteLegAndContinue() {
+  const dr = ui.rawMaterialSupplyChainRouteDrawing;
+  if (!dr || dr.points.length < 2) return;
+  const mi = dr.materialIndex;
+  const li = dr.legIndex;
+  ensureRawMaterialBranchesAligned();
+  const row = state.industry.rawMaterialBranches[mi];
+  if (!row) {
+    resetSupplyChainRouteDraft();
+    return;
+  }
+  let routes = normalizeSupplyChainTransportRoutesForBranch(row.supplyChainTransportRoutes, row.supplyChainDiagram);
+  routes[li] = { points: dr.points2263.map((p) => [p[0], p[1]]) };
+  state.industry.rawMaterialBranches[mi] = {
+    ...row,
+    supplyChainTransportRoutes: routes
+  };
+  resetSupplyChainRouteDraft();
+  void flushSaveToServer();
+  rebuildFromState();
+  uiUpdateStats();
+  setParticipantMapHintAfterIndustryGate();
+  const d = normalizeSupplyChainDiagram(state.industry.rawMaterialBranches[mi].supplyChainDiagram);
+  if (li + 1 < d.transportLegs.length) {
+    startSupplyChainTransportRouteLeg(mi, li + 1);
+  } else {
+    resumeRawMaterialBranchFlow();
+    if (!participantRawMaterialBranchWorkIncomplete()) {
+      setParticipantMapHintAfterIndustryGate();
+      void flushSaveToServer();
+    }
+  }
+}
+
+function startSupplyChainTransportRouteLeg(materialIndex, legIndex) {
+  if (readOnly) return;
+  clearPendingLocation();
+  resetSupplyChainRouteDraft();
+  ensureRawMaterialBranchesAligned();
+  const row = state.industry.rawMaterialBranches[materialIndex];
+  if (!row) return;
+  const d = normalizeSupplyChainDiagram(row.supplyChainDiagram);
+  if (legIndex < 0 || legIndex >= d.transportLegs.length) return;
+  const start = getSupplyChainRouteStartLatLng(row, legIndex);
+  if (!start) {
+    window.alert(
+      "Could not determine where this route starts. Check the originating location and earlier transportation legs."
+    );
+    return;
+  }
+  const leg = d.transportLegs[legIndex];
+  const [sx, sy] = gpsToEPSG2263(start.lng, start.lat);
+  ui.rawMaterialSupplyChainRouteDrawing = {
+    materialIndex,
+    legIndex,
+    modeKey: leg.modeKey,
+    points: [start],
+    points2263: [[sx, sy]]
+  };
+  refreshSupplyChainRouteDraftVisuals();
+  setParticipantMapHintAfterIndustryGate();
+  syncParticipantMapGateOverlay();
+  if (map) {
+    requestAnimationFrame(() => map.invalidateSize());
+  }
+}
+
+function startSupplyChainTransportRouteDrawing(materialIndex) {
+  ensureRawMaterialBranchesAligned();
+  const b = state.industry.rawMaterialBranches[materialIndex];
+  if (!b) return;
+  const d = normalizeSupplyChainDiagram(b.supplyChainDiagram);
+  const routes = normalizeSupplyChainTransportRoutesForBranch(b.supplyChainTransportRoutes, b.supplyChainDiagram);
+  b.supplyChainTransportRoutes = routes;
+  for (let i = 0; i < d.transportLegs.length; i++) {
+    const pts = routes[i]?.points;
+    if (!Array.isArray(pts) || pts.length < 2) {
+      startSupplyChainTransportRouteLeg(materialIndex, i);
+      return;
+    }
+  }
+  resumeRawMaterialBranchFlow();
 }
 
 function formatGold(n) {
@@ -638,7 +888,9 @@ const ui = {
   /** Participant: material index for the supply-chain intro popup (before branch questions). */
   rawMaterialSupplyChainIntroIndex: null,
   /** Participant: material index while editing the supply-chain diagram (second branch). */
-  rawMaterialSupplyChainDiagramIndex: null
+  rawMaterialSupplyChainDiagramIndex: null,
+  /** Participant: drawing supply-chain transportation routes on the map (after diagram is saved). */
+  rawMaterialSupplyChainRouteDrawing: null
 };
 
 const state = {
@@ -999,6 +1251,8 @@ function rebuildFromState() {
   layers.locations.clearLayers();
   layers.currentRoutes.clearLayers();
   layers.ibxRoutes.clearLayers();
+  if (layers.supplyChainRoutes) layers.supplyChainRoutes.clearLayers();
+  if (layers.supplyChainDraft) layers.supplyChainDraft.clearLayers();
 
   for (const loc of state.locations) {
     const meta = LOCATION_TYPES[loc.locationType] ?? LOCATION_TYPES.other;
@@ -1049,6 +1303,33 @@ function rebuildFromState() {
     const line = L.polyline(latlngs, createModePolylineStyle(getSegmentColor("ibx", seg), false));
     line.bindPopup(buildSegmentPopup(seg, "IBX Assumption"));
     layers.ibxRoutes.addLayer(line);
+  }
+
+  const scmats = state.industry?.rawMaterials ?? [];
+  const scbr = state.industry?.rawMaterialBranches ?? [];
+  for (let bi = 0; bi < scbr.length; bi++) {
+    const b = scbr[bi];
+    if (!b?.supplyChainDiagram) continue;
+    const d = normalizeSupplyChainDiagram(b.supplyChainDiagram);
+    const routes = normalizeSupplyChainTransportRoutesForBranch(b.supplyChainTransportRoutes, b.supplyChainDiagram);
+    const matLabel = String(scmats[bi] ?? "").trim() || `Material ${bi + 1}`;
+    for (let li = 0; li < routes.length; li++) {
+      const pts = routes[li]?.points;
+      if (!Array.isArray(pts) || pts.length < 2) continue;
+      const latlngs = surveyPointsToLatLngs(pts);
+      const modeKey = d.transportLegs[li]?.modeKey ?? "";
+      const color = getSupplyChainTransportRouteColor(modeKey);
+      const line = L.polyline(latlngs, createModePolylineStyle(color, false));
+      const modeLab = formatSupplyChainTransportModeLabel(d.transportLegs[li]);
+      line.bindPopup(
+        `${escapeHtml(matLabel)} · Transportation ${li + 1} (${escapeHtml(modeLab)}) · supply chain route`
+      );
+      layers.supplyChainRoutes.addLayer(line);
+    }
+  }
+
+  if (ui.rawMaterialSupplyChainRouteDrawing && layers.supplyChainDraft) {
+    refreshSupplyChainRouteDraftVisuals();
   }
 
   uiUpdateStats();
@@ -1516,6 +1797,7 @@ function clearLocations() {
   ui.rawMaterialOriginEditingIndex = null;
   ui.rawMaterialSupplyChainIntroIndex = null;
   ui.rawMaterialSupplyChainDiagramIndex = null;
+  resetSupplyChainRouteDraft();
   document.getElementById("roleGate")?.classList.remove("is-open");
   document.getElementById("goodsGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialsGate")?.classList.remove("is-open");
@@ -1524,6 +1806,8 @@ function clearLocations() {
   document.getElementById("rawMaterialOriginGate")?.classList.remove("is-open");
   syncParticipantMapGateOverlay();
   layers.locations.clearLayers();
+  if (layers.supplyChainRoutes) layers.supplyChainRoutes.clearLayers();
+  if (layers.supplyChainDraft) layers.supplyChainDraft.clearLayers();
   saveState();
   uiUpdateStats();
 }
@@ -1672,7 +1956,11 @@ function exportAllDataCSVFromState(stateObj, participantMeta = null) {
           supplyChainIntroAcknowledged: Boolean(b.supplyChainIntroAcknowledged),
           supplyChainDiagram: b.supplyChainDiagram
             ? normalizeSupplyChainDiagram(b.supplyChainDiagram)
-            : null
+            : null,
+          supplyChainTransportRoutes: normalizeSupplyChainTransportRoutesForBranch(
+            b.supplyChainTransportRoutes,
+            b.supplyChainDiagram
+          )
         };
       })
     );
@@ -1990,6 +2278,8 @@ function setupMap() {
     locations: L.layerGroup(),
     pendingLocation: L.layerGroup(),
     currentRoutes: L.layerGroup(),
+    supplyChainRoutes: L.layerGroup(),
+    supplyChainDraft: L.layerGroup(),
     ibxLine: L.layerGroup(),
     ibxStations: L.layerGroup(),
     ibxRoutes: L.layerGroup()
@@ -1998,11 +2288,21 @@ function setupMap() {
   layers.locations.addTo(map);
   layers.pendingLocation.addTo(map);
   layers.currentRoutes.addTo(map);
+  layers.supplyChainRoutes.addTo(map);
+  layers.supplyChainDraft.addTo(map);
   layers.ibxRoutes.addTo(map);
   // ibxLine is only shown when user enters Step 3 (handled in setStep()).
 
   map.on("click", (e) => {
     if (readOnly) return;
+    if (
+      SURVEY_MODE === "participant" &&
+      ui.activeStep === "locations" &&
+      ui.rawMaterialSupplyChainRouteDrawing
+    ) {
+      appendSupplyChainTransportRoutePoint(e.latlng);
+      return;
+    }
     if (ui.drawing.active) {
       ui.drawing.points.push(e.latlng);
       const [x, y] = gpsToEPSG2263(e.latlng.lng, e.latlng.lat);
@@ -2082,6 +2382,23 @@ function setParticipantMapHintAfterIndustryGate() {
     const name = String(state.industry.rawMaterials[idx] ?? "").trim() || "this material";
     ui.locationType = "none";
     hintEl.textContent = `Originating location for “${name}”: click the map to place a point, then confirm with √ or cancel with ×. You can also skip if you don't know the location.`;
+    syncRawMaterialOriginMapSkipVisibility();
+    return;
+  }
+
+  if (SURVEY_MODE === "participant" && ui.rawMaterialSupplyChainRouteDrawing) {
+    const dr = ui.rawMaterialSupplyChainRouteDrawing;
+    const name = String(state.industry.rawMaterials[dr.materialIndex] ?? "").trim() || "this material";
+    const d = normalizeSupplyChainDiagram(state.industry.rawMaterialBranches[dr.materialIndex]?.supplyChainDiagram);
+    const leg = d.transportLegs[dr.legIndex];
+    const modeLab = formatSupplyChainTransportModeLabel(leg);
+    const tn = dr.legIndex + 1;
+    ui.locationType = "none";
+    const startPhrase =
+      dr.legIndex === 0
+        ? "the originating location (first point is set automatically)"
+        : "the previous Transportation Mode Change (first point is set automatically)";
+    hintEl.textContent = `“${name}”: draw Transportation ${tn} (${modeLab}) on the map. The route starts from ${startPhrase}. Click to add more points along the route. Click √ next to the end label when it marks the correct stop for this leg.`;
     syncRawMaterialOriginMapSkipVisibility();
     return;
   }
@@ -2510,6 +2827,7 @@ function participantRawMaterialBranchWorkIncomplete() {
     if (rawMaterialOriginBranchNeedsCategoryGate(b)) return true;
     if (rawMaterialOriginBranchNeedsMap(b)) return true;
     if (rawMaterialSupplyChainBranchNeedsDiagramGate(b)) return true;
+    if (rawMaterialSupplyChainBranchNeedsTransportRoutes(b)) return true;
   }
   return false;
 }
@@ -2519,6 +2837,7 @@ function resumeRawMaterialBranchFlow() {
     ui.rawMaterialBranchMap = null;
     ui.rawMaterialOriginEditingIndex = null;
     ui.rawMaterialSupplyChainDiagramIndex = null;
+    resetSupplyChainRouteDraft();
     document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.remove("is-open");
     return;
   }
@@ -2543,6 +2862,14 @@ function resumeRawMaterialBranchFlow() {
     }
     if (rawMaterialSupplyChainBranchNeedsDiagramGate(b)) {
       openRawMaterialSupplyChainDiagramGate(i);
+      return;
+    }
+    if (rawMaterialSupplyChainBranchNeedsTransportRoutes(b)) {
+      ui.rawMaterialBranchMap = null;
+      ui.rawMaterialOriginEditingIndex = null;
+      startSupplyChainTransportRouteDrawing(i);
+      syncParticipantMapGateOverlay();
+      setParticipantMapHintAfterIndustryGate();
       return;
     }
   }
@@ -3038,9 +3365,14 @@ function initParticipantRawMaterialSupplyChainDiagramOnce() {
       return;
     }
     ensureRawMaterialBranchesAligned();
+    const prevRow = state.industry.rawMaterialBranches[idx];
     state.industry.rawMaterialBranches[idx] = {
-      ...state.industry.rawMaterialBranches[idx],
-      supplyChainDiagram: collected
+      ...prevRow,
+      supplyChainDiagram: collected,
+      supplyChainTransportRoutes: normalizeSupplyChainTransportRoutesForBranch(
+        prevRow?.supplyChainTransportRoutes,
+        collected
+      )
     };
     gate.classList.remove("is-open");
     ui.rawMaterialSupplyChainDiagramIndex = null;
