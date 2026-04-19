@@ -479,7 +479,37 @@ function getSupplyChainRouteStartLatLng(branch, legIndex) {
   return epsg2263XYToLatLng(last[0], last[1]);
 }
 
+function removeSupplyChainRoutePreviewPolyline() {
+  if (supplyChainRoutePreviewPolyline) {
+    try {
+      supplyChainRoutePreviewPolyline.remove();
+    } catch {
+      // ignore
+    }
+    supplyChainRoutePreviewPolyline = null;
+  }
+}
+
+function updateSupplyChainRoutePreview() {
+  const dr = ui.rawMaterialSupplyChainRouteDrawing;
+  removeSupplyChainRoutePreviewPolyline();
+  if (!dr || !layers?.supplyChainDraft) return;
+  if (!dr.previewCursorLatLng || dr.points.length < 1) return;
+  const last = dr.points[dr.points.length - 1];
+  const cursor = dr.previewCursorLatLng;
+  const color = getSupplyChainTransportRouteColor(dr.modeKey);
+  supplyChainRoutePreviewPolyline = L.polyline([last, cursor], {
+    color,
+    weight: 4,
+    opacity: 0.55,
+    dashArray: "6 10",
+    lineCap: "round",
+    lineJoin: "round"
+  }).addTo(layers.supplyChainDraft);
+}
+
 function resetSupplyChainRouteDraft() {
+  removeSupplyChainRoutePreviewPolyline();
   if (layers?.supplyChainDraft) layers.supplyChainDraft.clearLayers();
   ui.rawMaterialSupplyChainRouteDrawing = null;
 }
@@ -495,6 +525,7 @@ function supplyChainRouteConfirmLabel(d, legIndex) {
 function refreshSupplyChainRouteDraftVisuals() {
   const dr = ui.rawMaterialSupplyChainRouteDrawing;
   if (!dr || !layers?.supplyChainDraft) return;
+  removeSupplyChainRoutePreviewPolyline();
   layers.supplyChainDraft.clearLayers();
   const row = state.industry.rawMaterialBranches[dr.materialIndex];
   const d = normalizeSupplyChainDiagram(row?.supplyChainDiagram);
@@ -538,11 +569,13 @@ function refreshSupplyChainRouteDraftVisuals() {
       mk.on("click", (e) => L.DomEvent.stopPropagation(e));
     });
   }
+  updateSupplyChainRoutePreview();
 }
 
 function appendSupplyChainTransportRoutePoint(latlng) {
   const dr = ui.rawMaterialSupplyChainRouteDrawing;
   if (!dr) return;
+  dr.previewCursorLatLng = null;
   dr.points.push(latlng);
   const [x, y] = gpsToEPSG2263(latlng.lng, latlng.lat);
   dr.points2263.push([x, y]);
@@ -554,6 +587,7 @@ function appendSupplyChainTransportRoutePoint(latlng) {
 function popLastSupplyChainRoutePoint() {
   const dr = ui.rawMaterialSupplyChainRouteDrawing;
   if (!dr || dr.points.length <= 1) return;
+  dr.previewCursorLatLng = null;
   dr.points.pop();
   dr.points2263.pop();
   refreshSupplyChainRouteDraftVisuals();
@@ -1066,6 +1100,8 @@ function resetDraftDrawing() {
 
 let map;
 let layers;
+/** Rubber-band segment while drawing supply-chain routes (not persisted). */
+let supplyChainRoutePreviewPolyline = null;
 
 function markerIconFromSvg(svgSrc) {
   return L.divIcon({
@@ -2292,6 +2328,23 @@ function setupMap() {
   layers.supplyChainDraft.addTo(map);
   layers.ibxRoutes.addTo(map);
   // ibxLine is only shown when user enters Step 3 (handled in setStep()).
+
+  map.on("mousemove", (e) => {
+    if (readOnly) return;
+    if (SURVEY_MODE !== "participant" || ui.activeStep !== "locations") return;
+    const dr = ui.rawMaterialSupplyChainRouteDrawing;
+    if (!dr) return;
+    dr.previewCursorLatLng = e.latlng;
+    updateSupplyChainRoutePreview();
+  });
+
+  map.on("mouseout", () => {
+    if (readOnly) return;
+    const dr = ui.rawMaterialSupplyChainRouteDrawing;
+    if (!dr) return;
+    dr.previewCursorLatLng = null;
+    updateSupplyChainRoutePreview();
+  });
 
   map.on("click", (e) => {
     if (readOnly) return;
