@@ -45,7 +45,9 @@ function defaultSurveyJson() {
       goodsCategoryKeys: [],
       goodsOtherDetail: "",
       rawMaterials: [],
-      rawMaterialBranches: []
+      rawMaterialBranches: [],
+      products: [],
+      productBranches: []
     },
     locations: [],
     routes: {

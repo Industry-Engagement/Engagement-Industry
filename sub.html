@@ -122,9 +122,12 @@
               </div>
               <div class="participantLeftSection">
                 <h3 class="participantLeftSection__h">Products</h3>
-                <div class="participantPillRow participantPillRow--products">
-                  <span class="participantPill participantPill--muted">(Questions coming soon)</span>
-                </div>
+                <div
+                  id="participantProductPills"
+                  class="participantPillRow participantPillRow--products"
+                  role="tablist"
+                  aria-label="Products"
+                ></div>
               </div>
               <div id="participantLeftDetail" class="participantLeftDetail is-hidden">
                 <h3 class="participantLeftDetail__h">
@@ -353,6 +356,26 @@
           </div>
 
           <div
+            id="participantProductsGate"
+            class="rawMaterialsGate rawMaterialsGate--floating"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="participantProductsGateTitle"
+          >
+            <div class="participantGate__card rawMaterialsGate__card">
+              <h2 class="rawMaterialsGate__title" id="participantProductsGateTitle">What are your products?</h2>
+              <p class="participantGate__p rawMaterialsGate__intro">
+                Enter each product in its own field. Add more fields if you need them.
+              </p>
+              <div id="productsList" class="rawMaterialsList" role="list"></div>
+              <button type="button" class="ghostBtn rawMaterialsAddBtn" id="productsAddBtn">+ Add another</button>
+              <div class="participantGate__actions">
+                <button class="primaryBtn" id="productsContinueBtn" type="button">Continue</button>
+              </div>
+            </div>
+          </div>
+
+          <div
             id="rawMaterialSupplyChainIntroGate"
             class="rawMaterialSupplyChainIntroGate rawMaterialSupplyChainIntroGate--floating"
             role="dialog"
@@ -381,7 +404,8 @@
                 Please Provide the Supply Chain Information
               </h2>
               <p class="participantGate__p supplyChainDiagramGate__intro">
-                Raw Material <span id="rawMaterialSupplyChainDiagramBadge" class="supplyChainDiagram__rmBadge"></span>
+                <span id="supplyChainDiagramKindPrefix">Raw material</span>
+                <span id="rawMaterialSupplyChainDiagramBadge" class="supplyChainDiagram__rmBadge"></span>
               </p>
               <div id="rawMaterialSupplyChainDiagramMount" class="supplyChainDiagramMount"></div>
               <div class="participantGate__actions">

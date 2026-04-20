@@ -186,6 +186,10 @@ function normalizeRawMaterialsFromPayload(raw) {
     .slice(0, 40);
 }
 
+function normalizeProductsFromPayload(raw) {
+  return normalizeRawMaterialsFromPayload(raw);
+}
+
 function normalizeRawMaterialBranchesFromPayload(rawMaterials, branchesIn) {
   const n = rawMaterials.length;
   const arr = Array.isArray(branchesIn) ? branchesIn : [];
@@ -266,6 +270,87 @@ function ensureRawMaterialBranchesAligned() {
     }
   }
   state.industry.rawMaterialBranches = next;
+}
+
+function ensureProductBranchesAligned() {
+  const mats = state.industry.products ?? [];
+  let branches = state.industry.productBranches;
+  if (!Array.isArray(branches)) branches = [];
+  const next = [];
+  for (let i = 0; i < mats.length; i++) {
+    const prev = branches[i];
+    if (prev && typeof prev === "object") {
+      const diagram = normalizeSupplyChainDiagram(prev.supplyChainDiagram ?? defaultSupplyChainDiagram());
+      let tripFrequencyCount = null;
+      const tfc = prev.tripFrequencyCount;
+      if (typeof tfc === "number" && Number.isFinite(tfc) && tfc >= 1) tripFrequencyCount = Math.floor(tfc);
+      next.push({
+        originCategoryKey: String(prev.originCategoryKey ?? ""),
+        originOtherDetail: String(prev.originOtherDetail ?? ""),
+        originX: typeof prev.originX === "number" && Number.isFinite(prev.originX) ? prev.originX : null,
+        originY: typeof prev.originY === "number" && Number.isFinite(prev.originY) ? prev.originY : null,
+        originMapSkipped: Boolean(prev.originMapSkipped),
+        supplyChainIntroAcknowledged: Boolean(prev.supplyChainIntroAcknowledged),
+        supplyChainDiagram: diagram,
+        supplyChainTransportRoutes: normalizeSupplyChainTransportRoutesForBranch(
+          prev.supplyChainTransportRoutes,
+          diagram
+        ),
+        tripFrequencyCount,
+        tripFrequencyPeriod: normalizeTripFrequencyPeriod(prev.tripFrequencyPeriod)
+      });
+    } else {
+      const diagram = defaultSupplyChainDiagram();
+      next.push({
+        originCategoryKey: "",
+        originOtherDetail: "",
+        originX: null,
+        originY: null,
+        originMapSkipped: false,
+        supplyChainIntroAcknowledged: false,
+        supplyChainDiagram: diagram,
+        supplyChainTransportRoutes: normalizeSupplyChainTransportRoutesForBranch([], diagram),
+        tripFrequencyCount: null,
+        tripFrequencyPeriod: ""
+      });
+    }
+  }
+  state.industry.productBranches = next;
+}
+
+/** Which industry list supply-chain UI is operating on (raw materials vs output products). */
+const BRANCH_KIND_RAW = "rawMaterial";
+const BRANCH_KIND_PRODUCT = "product";
+
+function industryBranchArrays(kind) {
+  if (kind === BRANCH_KIND_PRODUCT) {
+    return {
+      itemsKey: "products",
+      branchesKey: "productBranches",
+      ensure: ensureProductBranchesAligned,
+      items: state.industry.products ?? [],
+      branches: state.industry.productBranches ?? []
+    };
+  }
+  return {
+    itemsKey: "rawMaterials",
+    branchesKey: "rawMaterialBranches",
+    ensure: ensureRawMaterialBranchesAligned,
+    items: state.industry.rawMaterials ?? [],
+    branches: state.industry.rawMaterialBranches ?? []
+  };
+}
+
+function branchRow(kind, index) {
+  const { ensure, branchesKey } = industryBranchArrays(kind);
+  ensure();
+  return state.industry[branchesKey][index];
+}
+
+function setBranchRow(kind, index, row) {
+  const { ensure, branchesKey } = industryBranchArrays(kind);
+  ensure();
+  state.industry[branchesKey][index] = row;
 }
 
 function rawMaterialOriginBranchNeedsCategoryGate(b) {
@@ -580,10 +665,45 @@ function getSupplyChainRouteStartLatLng(branch, legIndex) {
   return epsg2263XYToLatLng(last[0], last[1]);
 }
 
+/** Last point of the final transportation leg (diagram node C), when all legs are drawn. */
+function getSupplyChainRouteDestinationLatLng(branch) {
+  if (!branch?.supplyChainDiagram) return null;
+  if (!isSupplyChainTransportRoutesComplete(branch)) return null;
+  const d = normalizeSupplyChainDiagram(branch.supplyChainDiagram);
+  const routes = normalizeSupplyChainTransportRoutesForBranch(branch.supplyChainTransportRoutes, branch.supplyChainDiagram);
+  const n = d.transportLegs.length;
+  if (n < 1) return null;
+  const pts = routes[n - 1]?.points;
+  if (!Array.isArray(pts) || pts.length < 2) return null;
+  const last = pts[pts.length - 1];
+  return epsg2263XYToLatLng(last[0], last[1]);
+}
+
+function formatSupplyChainDestinationDesc(dIn) {
+  const d = normalizeSupplyChainDiagram(dIn ?? {});
+  const destKey = normalizeSupplyLocationKeyForDiagram(d.destinationCategoryKey);
+  if (!destKey) return "—";
+  if (destKey === "other") {
+    const t = String(d.destinationOtherDetail ?? "").trim();
+    return t ? `Others (${t})` : "Others";
+  }
+  const opt = SUPPLY_CHAIN_LOCATION_OPTIONS.find((o) => o.key === destKey);
+  return opt ? opt.label : destKey;
+}
+
+function markerIconForSupplyChainDestinationCategory(dIn) {
+  const d = normalizeSupplyChainDiagram(dIn ?? {});
+  const k = normalizeSupplyLocationKeyForDiagram(d.destinationCategoryKey);
+  const svg = k && k !== "other" ? ORIGIN_TYPE_ICONS[k] : null;
+  if (svg) return markerIconFromSvg(svg);
+  return markerIconColored("#7c3aed");
+}
+
 /** Clear map geometry for transportation leg `fromLegIndex` and all following legs; earlier legs unchanged. */
-function clearSupplyChainTransportRoutesFromLeg(materialIndex, fromLegIndex) {
-  ensureRawMaterialBranchesAligned();
-  const row = state.industry.rawMaterialBranches[materialIndex];
+function clearSupplyChainTransportRoutesFromLeg(branchKind, branchIndex, fromLegIndex) {
+  const { ensure, branchesKey } = industryBranchArrays(branchKind);
+  ensure();
+  const row = state.industry[branchesKey][branchIndex];
   if (!row) return;
   const d = normalizeSupplyChainDiagram(row.supplyChainDiagram);
   const n = d.transportLegs.length;
@@ -592,7 +712,7 @@ function clearSupplyChainTransportRoutesFromLeg(materialIndex, fromLegIndex) {
   for (let i = fromLegIndex; i < n; i++) {
     routes[i] = { points: [] };
   }
-  state.industry.rawMaterialBranches[materialIndex] = {
+  state.industry[branchesKey][branchIndex] = {
     ...row,
     supplyChainTransportRoutes: routes,
     tripFrequencyCount: null,
@@ -605,16 +725,16 @@ function canRedrawSupplyChainTransportLeg(branch, legIndex) {
 }
 
 /** Participant left panel: erase this leg and later routes, then start drawing this leg on the map. */
-function participantRedrawSupplyChainRouteFromLeg(materialIndex, legIndex) {
+function participantRedrawSupplyChainRouteFromLeg(branchKind, branchIndex, legIndex) {
   if (readOnly || SURVEY_MODE !== "participant") return;
   clearPendingLocation();
-  clearSupplyChainTransportRoutesFromLeg(materialIndex, legIndex);
+  clearSupplyChainTransportRoutesFromLeg(branchKind, branchIndex, legIndex);
   void flushSaveToServer();
   rebuildFromState();
   uiUpdateStats();
   setParticipantMapHintAfterIndustryGate();
   syncParticipantMapGateOverlay();
-  startSupplyChainTransportRouteLeg(materialIndex, legIndex);
+  startSupplyChainTransportRouteLeg(branchKind, branchIndex, legIndex);
 }
 
 function removeSupplyChainRoutePreviewPolyline() {
@@ -629,7 +749,7 @@ function removeSupplyChainRoutePreviewPolyline() {
 }
 
 function updateSupplyChainRoutePreview() {
-  const dr = ui.rawMaterialSupplyChainRouteDrawing;
+  const dr = ui.scRouteDrawing;
   removeSupplyChainRoutePreviewPolyline();
   if (!dr || !layers?.supplyChainDraft) return;
   if (!dr.previewCursorLatLng || dr.points.length < 1) return;
@@ -649,7 +769,7 @@ function updateSupplyChainRoutePreview() {
 function resetSupplyChainRouteDraft() {
   removeSupplyChainRoutePreviewPolyline();
   if (layers?.supplyChainDraft) layers.supplyChainDraft.clearLayers();
-  ui.rawMaterialSupplyChainRouteDrawing = null;
+  ui.scRouteDrawing = null;
   syncParticipantLeftPanel();
   updateParticipantSupplyChainRouteEditingUI();
 }
@@ -701,13 +821,13 @@ function updateParticipantSupplyChainRouteEditingUI() {
   const banner = document.getElementById("participantSupplyChainRouteBanner");
   const hint = document.getElementById("participantSupplyChainRouteCursorHint");
   if (!banner && !hint) return;
-  const dr = ui.rawMaterialSupplyChainRouteDrawing;
+  const dr = ui.scRouteDrawing;
   const show = SURVEY_MODE === "participant" && !readOnly && dr != null;
   if (banner) {
     banner.classList.toggle("is-hidden", !show);
     banner.setAttribute("aria-hidden", show ? "false" : "true");
     if (show) {
-      const row = state.industry.rawMaterialBranches[dr.materialIndex];
+      const row = branchRow(dr.branchKind, dr.branchIndex);
       const d = normalizeSupplyChainDiagram(row?.supplyChainDiagram);
       const leg = d.transportLegs[dr.legIndex] ?? { modeKey: "", otherDetail: "" };
       const modeLab = formatSupplyChainTransportModeLabel(leg);
@@ -732,11 +852,11 @@ function updateParticipantSupplyChainRouteEditingUI() {
 }
 
 function refreshSupplyChainRouteDraftVisuals() {
-  const dr = ui.rawMaterialSupplyChainRouteDrawing;
+  const dr = ui.scRouteDrawing;
   if (!dr || !layers?.supplyChainDraft) return;
   removeSupplyChainRoutePreviewPolyline();
   layers.supplyChainDraft.clearLayers();
-  const row = state.industry.rawMaterialBranches[dr.materialIndex];
+  const row = branchRow(dr.branchKind, dr.branchIndex);
   const d = normalizeSupplyChainDiagram(row?.supplyChainDiagram);
   const color = getSupplyChainTransportRouteColor(dr.modeKey);
   const dashStyle = { color, weight: 5, opacity: 0.92, dashArray: "7 5" };
@@ -782,7 +902,7 @@ function refreshSupplyChainRouteDraftVisuals() {
 }
 
 function appendSupplyChainTransportRoutePoint(latlng) {
-  const dr = ui.rawMaterialSupplyChainRouteDrawing;
+  const dr = ui.scRouteDrawing;
   if (!dr) return;
   dr.previewCursorLatLng = null;
   dr.points.push(latlng);
@@ -794,7 +914,7 @@ function appendSupplyChainTransportRoutePoint(latlng) {
 
 /** Remove the last clicked point; the automatic start point (index 0) is kept. */
 function popLastSupplyChainRoutePoint() {
-  const dr = ui.rawMaterialSupplyChainRouteDrawing;
+  const dr = ui.scRouteDrawing;
   if (!dr || dr.points.length <= 1) return;
   dr.previewCursorLatLng = null;
   dr.points.pop();
@@ -804,19 +924,21 @@ function popLastSupplyChainRoutePoint() {
 }
 
 function finishSupplyChainTransportRouteLegAndContinue() {
-  const dr = ui.rawMaterialSupplyChainRouteDrawing;
+  const dr = ui.scRouteDrawing;
   if (!dr || dr.points.length < 2) return;
-  const mi = dr.materialIndex;
+  const bk = dr.branchKind;
+  const bi = dr.branchIndex;
   const li = dr.legIndex;
-  ensureRawMaterialBranchesAligned();
-  const row = state.industry.rawMaterialBranches[mi];
+  const { ensure, branchesKey } = industryBranchArrays(bk);
+  ensure();
+  const row = state.industry[branchesKey][bi];
   if (!row) {
     resetSupplyChainRouteDraft();
     return;
   }
   let routes = normalizeSupplyChainTransportRoutesForBranch(row.supplyChainTransportRoutes, row.supplyChainDiagram);
   routes[li] = { points: dr.points2263.map((p) => [p[0], p[1]]) };
-  state.industry.rawMaterialBranches[mi] = {
+  state.industry[branchesKey][bi] = {
     ...row,
     supplyChainTransportRoutes: routes
   };
@@ -825,24 +947,25 @@ function finishSupplyChainTransportRouteLegAndContinue() {
   rebuildFromState();
   uiUpdateStats();
   setParticipantMapHintAfterIndustryGate();
-  const d = normalizeSupplyChainDiagram(state.industry.rawMaterialBranches[mi].supplyChainDiagram);
+  const d = normalizeSupplyChainDiagram(state.industry[branchesKey][bi].supplyChainDiagram);
   if (li + 1 < d.transportLegs.length) {
-    startSupplyChainTransportRouteLeg(mi, li + 1);
+    startSupplyChainTransportRouteLeg(bk, bi, li + 1);
   } else {
-    resumeRawMaterialBranchFlow();
-    if (!participantRawMaterialBranchWorkIncomplete()) {
+    resumeParticipantSupplyChainFlow();
+    if (!participantAnySupplyChainBranchWorkIncomplete()) {
       setParticipantMapHintAfterIndustryGate();
       void flushSaveToServer();
     }
   }
 }
 
-function startSupplyChainTransportRouteLeg(materialIndex, legIndex) {
+function startSupplyChainTransportRouteLeg(branchKind, branchIndex, legIndex) {
   if (readOnly) return;
   clearPendingLocation();
   resetSupplyChainRouteDraft();
-  ensureRawMaterialBranchesAligned();
-  const row = state.industry.rawMaterialBranches[materialIndex];
+  const { ensure, branchesKey } = industryBranchArrays(branchKind);
+  ensure();
+  const row = state.industry[branchesKey][branchIndex];
   if (!row) return;
   const d = normalizeSupplyChainDiagram(row.supplyChainDiagram);
   if (legIndex < 0 || legIndex >= d.transportLegs.length) return;
@@ -855,8 +978,10 @@ function startSupplyChainTransportRouteLeg(materialIndex, legIndex) {
   }
   const leg = d.transportLegs[legIndex];
   const [sx, sy] = gpsToEPSG2263(start.lng, start.lat);
-  ui.rawMaterialSupplyChainRouteDrawing = {
-    materialIndex,
+  ui.scKind = branchKind;
+  ui.scRouteDrawing = {
+    branchKind,
+    branchIndex,
     legIndex,
     modeKey: leg.modeKey,
     points: [start],
@@ -871,21 +996,22 @@ function startSupplyChainTransportRouteLeg(materialIndex, legIndex) {
   }
 }
 
-function startSupplyChainTransportRouteDrawing(materialIndex) {
-  ensureRawMaterialBranchesAligned();
-  const b = state.industry.rawMaterialBranches[materialIndex];
+function startSupplyChainTransportRouteDrawing(branchKind, branchIndex) {
+  const { ensure, branchesKey } = industryBranchArrays(branchKind);
+  ensure();
+  const b = state.industry[branchesKey][branchIndex];
   if (!b) return;
   const d = normalizeSupplyChainDiagram(b.supplyChainDiagram);
   const routes = normalizeSupplyChainTransportRoutesForBranch(b.supplyChainTransportRoutes, b.supplyChainDiagram);
-  b.supplyChainTransportRoutes = routes;
+  state.industry[branchesKey][branchIndex] = { ...b, supplyChainTransportRoutes: routes };
   for (let i = 0; i < d.transportLegs.length; i++) {
     const pts = routes[i]?.points;
     if (!Array.isArray(pts) || pts.length < 2) {
-      startSupplyChainTransportRouteLeg(materialIndex, i);
+      startSupplyChainTransportRouteLeg(branchKind, branchIndex, i);
       return;
     }
   }
-  resumeRawMaterialBranchFlow();
+  resumeParticipantSupplyChainFlow();
 }
 
 function formatGold(n) {
@@ -1125,20 +1251,19 @@ const ui = {
   },
   /** Participant only: { type, latlng } before confirm (√); not persisted until committed. */
   pendingLocation: null,
-  /** Participant: map phase — place originating location for rawMaterials[materialIndex]. */
-  rawMaterialBranchMap: null,
-  /** Participant: which material index the origin dialog is editing. */
-  rawMaterialOriginEditingIndex: null,
-  /** Participant: material index for the supply-chain intro popup (before branch questions). */
-  rawMaterialSupplyChainIntroIndex: null,
-  /** Participant: material index while editing the supply-chain diagram (second branch). */
-  rawMaterialSupplyChainDiagramIndex: null,
-  /** Participant: drawing supply-chain transportation routes on the map (after diagram is saved). */
-  rawMaterialSupplyChainRouteDrawing: null,
-  /** Participant: material index while the trip-frequency popup is open. */
-  rawMaterialTripFrequencyMaterialIndex: null,
-  /** Participant: which raw material is selected in the left panel (diagram detail). */
-  participantSelectedRawMaterialIndex: null
+  /** Unified supply-chain branch context (raw materials or output products). */
+  scKind: BRANCH_KIND_RAW,
+  scIntroIndex: null,
+  scOriginIndex: null,
+  scDiagramIndex: null,
+  scTripFreqIndex: null,
+  /** { kind: 'rawMaterial'|'product', branchIndex: number } — map placement for origin. */
+  scBranchMap: null,
+  /** { kind, branchIndex, legIndex, modeKey, points, points2263, previewCursorLatLng } */
+  scRouteDrawing: null,
+  /** Left panel: which branch list and row are shown in the detail area. */
+  participantLeftPanelKind: BRANCH_KIND_RAW,
+  participantLeftPanelIndex: 0
 };
 
 const state = {
@@ -1149,7 +1274,9 @@ const state = {
     goodsCategoryKeys: [],
     goodsOtherDetail: "",
     rawMaterials: [],
-    rawMaterialBranches: []
+    rawMaterialBranches: [],
+    products: [],
+    productBranches: []
   },
   locations: [],
   routes: {
@@ -1246,6 +1373,8 @@ function applySurveyPayload(parsed, options = {}) {
     rawMaterials,
     parsed.industry?.rawMaterialBranches
   );
+  const products = normalizeProductsFromPayload(parsed.industry?.products);
+  const productBranches = normalizeRawMaterialBranchesFromPayload(products, parsed.industry?.productBranches);
   state.industry = {
     companyName: String(parsed.industry?.companyName ?? ""),
     roleKey: String(parsed.industry?.roleKey ?? ""),
@@ -1253,7 +1382,9 @@ function applySurveyPayload(parsed, options = {}) {
     goodsCategoryKeys,
     goodsOtherDetail: String(parsed.industry?.goodsOtherDetail ?? ""),
     rawMaterials,
-    rawMaterialBranches
+    rawMaterialBranches,
+    products,
+    productBranches
   };
 
   if (didMigrate && persist) saveState();
@@ -1355,7 +1486,7 @@ function buildPendingLocationConfirmIconHtml(dotColor, svgSrc) {
 
 function pendingLocationDotColor(pending) {
   if (!pending) return LOCATION_TYPES.other.color;
-  if (pending.kind === "rawMaterialOrigin") return "#14b8a6";
+  if (pending.kind === "branchOrigin" || pending.kind === "rawMaterialOrigin") return "#14b8a6";
   const t = pending.type ?? "other";
   const meta = LOCATION_TYPES[t] ?? LOCATION_TYPES.other;
   return meta.color;
@@ -1372,9 +1503,10 @@ function renderPendingLocationMarker() {
   if (!ui.pendingLocation) return;
   const { latlng } = ui.pendingLocation;
   const dotColor = pendingLocationDotColor(ui.pendingLocation);
-  const pendingSvg = ui.pendingLocation.kind === "rawMaterialOrigin"
-    ? ORIGIN_TYPE_ICONS[ui.pendingLocation.originCategoryKey]
-    : LOCATION_TYPE_ICONS[ui.pendingLocation.type];
+  const pendingSvg =
+    ui.pendingLocation.kind === "branchOrigin" || ui.pendingLocation.kind === "rawMaterialOrigin"
+      ? ORIGIN_TYPE_ICONS[ui.pendingLocation.originCategoryKey]
+      : LOCATION_TYPE_ICONS[ui.pendingLocation.type];
   const icon = L.divIcon({
     className: "locationPendingConfirm-marker",
     html: buildPendingLocationConfirmIconHtml(dotColor, pendingSvg),
@@ -1420,39 +1552,53 @@ function setPendingLocation(type, latlng) {
   renderPendingLocationMarker();
 }
 
-function setPendingRawMaterialOrigin(materialIndex, latlng) {
+function setPendingBranchOrigin(branchKind, branchIndex, latlng) {
   if (readOnly) return;
-  ui.pendingLocation = { kind: "rawMaterialOrigin", materialIndex, latlng };
+  const br = branchRow(branchKind, branchIndex);
+  ui.pendingLocation = {
+    kind: "branchOrigin",
+    branchKind,
+    branchIndex,
+    originCategoryKey: br?.originCategoryKey,
+    latlng
+  };
   renderPendingLocationMarker();
+}
+
+function setPendingRawMaterialOrigin(materialIndex, latlng) {
+  setPendingBranchOrigin(BRANCH_KIND_RAW, materialIndex, latlng);
 }
 
 function commitPendingLocation() {
   if (!ui.pendingLocation || readOnly) return;
   const p = ui.pendingLocation;
-  if (p.kind === "rawMaterialOrigin") {
-    const { materialIndex, latlng } = p;
+  if (p.kind === "branchOrigin" || p.kind === "rawMaterialOrigin") {
+    const branchKind = p.kind === "rawMaterialOrigin" ? BRANCH_KIND_RAW : p.branchKind;
+    const branchIndex = p.kind === "rawMaterialOrigin" ? p.materialIndex : p.branchIndex;
+    const { latlng } = p;
     clearPendingLocation();
     const [x, y] = gpsToEPSG2263(latlng.lng, latlng.lat);
-    ensureRawMaterialBranchesAligned();
-    const row = state.industry.rawMaterialBranches[materialIndex] ?? {
+    const { ensure, branchesKey } = industryBranchArrays(branchKind);
+    ensure();
+    const row = state.industry[branchesKey][branchIndex] ?? {
       originCategoryKey: "",
       originOtherDetail: "",
       originX: null,
       originY: null,
       originMapSkipped: false
     };
-    state.industry.rawMaterialBranches[materialIndex] = {
+    state.industry[branchesKey][branchIndex] = {
       ...row,
       originX: x,
       originY: y,
       originMapSkipped: false
     };
-    ui.rawMaterialBranchMap = null;
+    ui.scBranchMap = null;
     void flushSaveToServer();
     rebuildFromState();
     uiUpdateStats();
     setParticipantMapHintAfterIndustryGate();
-    advanceAfterRawMaterialOriginPlaced(materialIndex);
+    advanceAfterRawMaterialOriginPlaced(branchIndex);
     return;
   }
   const type = p.type;
@@ -1465,7 +1611,7 @@ function cancelPendingLocation() {
   clearPendingLocation();
   const hintEl = document.getElementById("mapHint");
   if (!hintEl || SURVEY_MODE !== "participant" || ui.activeStep !== "locations") return;
-  if (ui.rawMaterialBranchMap !== null) {
+  if (ui.scBranchMap !== null) {
     setParticipantMapHintAfterIndustryGate();
     return;
   }
@@ -1497,11 +1643,97 @@ function buildSegmentPopup(seg, sectionLabel) {
   return [segmentStr, `Length: ${lengthStr}`, transferStr, totalStr].join("<br/>");
 }
 
+/** Originating-location pins for raw-material or product supply-chain branches. */
+function addSupplyChainBranchOriginMarkersToLocationsLayer(branches, itemLabels, kind) {
+  const isProduct = kind === BRANCH_KIND_PRODUCT;
+  const roleLine = isProduct ? "Product origin" : "Raw material origin";
+  const fallback = isProduct ? "Product" : "Material";
+  const arr = Array.isArray(branches) ? branches : [];
+  const labels = Array.isArray(itemLabels) ? itemLabels : [];
+  for (let i = 0; i < arr.length; i++) {
+    const b = arr[i];
+    if (typeof b?.originX !== "number" || typeof b?.originY !== "number") continue;
+    const latlng = epsg2263XYToLatLng(b.originX, b.originY);
+    const itemLabel = String(labels[i] ?? "").trim() || `${fallback} ${i + 1}`;
+    const originOpt = RAW_MATERIAL_ORIGIN_OPTIONS.find((o) => o.key === b.originCategoryKey);
+    let originDesc = "—";
+    if (originOpt) originDesc = originOpt.label;
+    else if (b.originCategoryKey === "other") {
+      const d = String(b.originOtherDetail ?? "").trim();
+      originDesc = d ? `Others (${d})` : "Others";
+    }
+    const originSvg = ORIGIN_TYPE_ICONS[b.originCategoryKey];
+    const mk = L.marker(latlng, {
+      icon: originSvg ? markerIconFromSvg(originSvg) : markerIconColored("#14b8a6"),
+      draggable: false
+    });
+    mk.bindPopup(
+      `${roleLine}<br/>${escapeHtml(itemLabel)}<br/>Where it originates: ${escapeHtml(originDesc)}`
+    );
+    layers.locations.addLayer(mk);
+  }
+}
+
+/** Saved supply-chain transport polylines for raw-material or product branches. */
+function addSupplyChainBranchRoutePolylinesToLayer(branches, itemLabels, kind) {
+  const isProduct = kind === BRANCH_KIND_PRODUCT;
+  const fallback = isProduct ? "Product" : "Material";
+  const routeSuffix = isProduct ? "product supply chain route" : "supply chain route";
+  const arr = Array.isArray(branches) ? branches : [];
+  const labels = Array.isArray(itemLabels) ? itemLabels : [];
+  for (let bi = 0; bi < arr.length; bi++) {
+    const b = arr[bi];
+    if (!b?.supplyChainDiagram) continue;
+    const d = normalizeSupplyChainDiagram(b.supplyChainDiagram);
+    const routes = normalizeSupplyChainTransportRoutesForBranch(b.supplyChainTransportRoutes, b.supplyChainDiagram);
+    const itemLabel = String(labels[bi] ?? "").trim() || `${fallback} ${bi + 1}`;
+    for (let li = 0; li < routes.length; li++) {
+      const pts = routes[li]?.points;
+      if (!Array.isArray(pts) || pts.length < 2) continue;
+      const latlngs = surveyPointsToLatLngs(pts);
+      const modeKey = d.transportLegs[li]?.modeKey ?? "";
+      const color = getSupplyChainTransportRouteColor(modeKey);
+      const line = L.polyline(latlngs, createModePolylineStyle(color, false));
+      const modeLab = formatSupplyChainTransportModeLabel(d.transportLegs[li]);
+      line.bindPopup(
+        `${escapeHtml(itemLabel)} · Transportation ${li + 1} (${escapeHtml(modeLab)}) · ${routeSuffix}`
+      );
+      layers.supplyChainRoutes.addLayer(line);
+    }
+  }
+}
+
+/** Destination (diagram node C): icon from destination category; position from last point of last drawn leg. */
+function addSupplyChainBranchDestinationMarkersToLayer(branches, itemLabels, kind) {
+  if (!layers?.supplyChainDestinations) return;
+  const isProduct = kind === BRANCH_KIND_PRODUCT;
+  const roleLine = isProduct ? "Product destination" : "Raw material destination";
+  const fallback = isProduct ? "Product" : "Material";
+  const arr = Array.isArray(branches) ? branches : [];
+  const labels = Array.isArray(itemLabels) ? itemLabels : [];
+  for (let i = 0; i < arr.length; i++) {
+    const b = arr[i];
+    if (!b || b.originCategoryKey === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) continue;
+    const latlng = getSupplyChainRouteDestinationLatLng(b);
+    if (!latlng) continue;
+    const d = normalizeSupplyChainDiagram(b.supplyChainDiagram);
+    const itemLabel = String(labels[i] ?? "").trim() || `${fallback} ${i + 1}`;
+    const destDesc = formatSupplyChainDestinationDesc(d);
+    const icon = markerIconForSupplyChainDestinationCategory(d);
+    const mk = L.marker(latlng, { icon, draggable: false });
+    mk.bindPopup(
+      `${roleLine}<br/>${escapeHtml(itemLabel)}<br/>Destination type: ${escapeHtml(destDesc)}`
+    );
+    layers.supplyChainDestinations.addLayer(mk);
+  }
+}
+
 function rebuildFromState() {
   layers.locations.clearLayers();
   layers.currentRoutes.clearLayers();
   layers.ibxRoutes.clearLayers();
   if (layers.supplyChainRoutes) layers.supplyChainRoutes.clearLayers();
+  if (layers.supplyChainDestinations) layers.supplyChainDestinations.clearLayers();
   if (layers.supplyChainDraft) layers.supplyChainDraft.clearLayers();
 
   for (const loc of state.locations) {
@@ -1519,27 +1751,16 @@ function rebuildFromState() {
     layers.locations.addLayer(marker);
   }
 
-  const rmats = state.industry?.rawMaterials ?? [];
-  const rbr = state.industry?.rawMaterialBranches ?? [];
-  for (let i = 0; i < rbr.length; i++) {
-    const b = rbr[i];
-    if (typeof b?.originX !== "number" || typeof b?.originY !== "number") continue;
-    const latlng = epsg2263XYToLatLng(b.originX, b.originY);
-    const matLabel = String(rmats[i] ?? "").trim() || `Material ${i + 1}`;
-    const originOpt = RAW_MATERIAL_ORIGIN_OPTIONS.find((o) => o.key === b.originCategoryKey);
-    let originDesc = "—";
-    if (originOpt) originDesc = originOpt.label;
-    else if (b.originCategoryKey === "other") {
-      const d = String(b.originOtherDetail ?? "").trim();
-      originDesc = d ? `Others (${d})` : "Others";
-    }
-    const originSvg = ORIGIN_TYPE_ICONS[b.originCategoryKey];
-    const mk = L.marker(latlng, { icon: originSvg ? markerIconFromSvg(originSvg) : markerIconColored("#14b8a6"), draggable: false });
-    mk.bindPopup(
-      `Raw material origin<br/>${escapeHtml(matLabel)}<br/>Where it originates: ${escapeHtml(originDesc)}`
-    );
-    layers.locations.addLayer(mk);
-  }
+  addSupplyChainBranchOriginMarkersToLocationsLayer(
+    state.industry?.rawMaterialBranches,
+    state.industry?.rawMaterials,
+    BRANCH_KIND_RAW
+  );
+  addSupplyChainBranchOriginMarkersToLocationsLayer(
+    state.industry?.productBranches,
+    state.industry?.products,
+    BRANCH_KIND_PRODUCT
+  );
 
   for (const seg of state.routes.current.segments) {
     const latlngs = surveyPointsToLatLngs(seg.points);
@@ -1555,30 +1776,29 @@ function rebuildFromState() {
     layers.ibxRoutes.addLayer(line);
   }
 
-  const scmats = state.industry?.rawMaterials ?? [];
-  const scbr = state.industry?.rawMaterialBranches ?? [];
-  for (let bi = 0; bi < scbr.length; bi++) {
-    const b = scbr[bi];
-    if (!b?.supplyChainDiagram) continue;
-    const d = normalizeSupplyChainDiagram(b.supplyChainDiagram);
-    const routes = normalizeSupplyChainTransportRoutesForBranch(b.supplyChainTransportRoutes, b.supplyChainDiagram);
-    const matLabel = String(scmats[bi] ?? "").trim() || `Material ${bi + 1}`;
-    for (let li = 0; li < routes.length; li++) {
-      const pts = routes[li]?.points;
-      if (!Array.isArray(pts) || pts.length < 2) continue;
-      const latlngs = surveyPointsToLatLngs(pts);
-      const modeKey = d.transportLegs[li]?.modeKey ?? "";
-      const color = getSupplyChainTransportRouteColor(modeKey);
-      const line = L.polyline(latlngs, createModePolylineStyle(color, false));
-      const modeLab = formatSupplyChainTransportModeLabel(d.transportLegs[li]);
-      line.bindPopup(
-        `${escapeHtml(matLabel)} · Transportation ${li + 1} (${escapeHtml(modeLab)}) · supply chain route`
-      );
-      layers.supplyChainRoutes.addLayer(line);
-    }
-  }
+  addSupplyChainBranchRoutePolylinesToLayer(
+    state.industry?.rawMaterialBranches,
+    state.industry?.rawMaterials,
+    BRANCH_KIND_RAW
+  );
+  addSupplyChainBranchRoutePolylinesToLayer(
+    state.industry?.productBranches,
+    state.industry?.products,
+    BRANCH_KIND_PRODUCT
+  );
 
-  if (ui.rawMaterialSupplyChainRouteDrawing && layers.supplyChainDraft) {
+  addSupplyChainBranchDestinationMarkersToLayer(
+    state.industry?.rawMaterialBranches,
+    state.industry?.rawMaterials,
+    BRANCH_KIND_RAW
+  );
+  addSupplyChainBranchDestinationMarkersToLayer(
+    state.industry?.productBranches,
+    state.industry?.products,
+    BRANCH_KIND_PRODUCT
+  );
+
+  if (ui.scRouteDrawing && layers.supplyChainDraft) {
     refreshSupplyChainRouteDraftVisuals();
   }
 
@@ -1670,7 +1890,9 @@ function uiUpdateStats() {
     const goodsPart = goodsSuffix ? ` · Goods: ${goodsSuffix}` : "";
     const rawSuffix = formatParticipantRawMaterialsSummary(state.industry);
     const rawPart = rawSuffix ? ` · Raw materials: ${rawSuffix}` : "";
-    condInd.textContent = c ? `Industry / company: ${c}${roleSuffix}${goodsPart}${rawPart}` : "";
+    const prodSuffix = formatParticipantProductsSummary(state.industry);
+    const prodPart = prodSuffix ? ` · Products: ${prodSuffix}` : "";
+    condInd.textContent = c ? `Industry / company: ${c}${roleSuffix}${goodsPart}${rawPart}${prodPart}` : "";
     condInd.classList.toggle("is-hidden", !c || !viewingParticipantId);
   }
 
@@ -1689,7 +1911,8 @@ function shouldShowParticipantCompanyBanner() {
       document.getElementById("rawMaterialSupplyChainIntroGate")?.classList.contains("is-open") ||
       document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.contains("is-open") ||
       document.getElementById("rawMaterialOriginGate")?.classList.contains("is-open") ||
-      document.getElementById("rawMaterialTripFrequencyGate")?.classList.contains("is-open")
+      document.getElementById("rawMaterialTripFrequencyGate")?.classList.contains("is-open") ||
+      document.getElementById("participantProductsGate")?.classList.contains("is-open")
   );
   return (
     SURVEY_MODE === "participant" &&
@@ -1697,7 +1920,7 @@ function shouldShowParticipantCompanyBanner() {
     ui.activeStep === "locations" &&
     !hasWorkplace &&
     !mapGatesOpen &&
-    !ui.rawMaterialSupplyChainRouteDrawing
+    !ui.scRouteDrawing
   );
 }
 
@@ -1749,7 +1972,7 @@ function shouldShowParticipantRawMaterialOriginBanner() {
     SURVEY_MODE === "participant" &&
     !readOnly &&
     ui.activeStep === "locations" &&
-    ui.rawMaterialBranchMap !== null
+    ui.scBranchMap !== null
   );
 }
 
@@ -1760,9 +1983,14 @@ function syncParticipantRawMaterialOriginBannerVisibility() {
   if (!show) rawMaterialOriginBannerPointerOnMap = false;
   else if (map?.getContainer()?.matches?.(":hover")) rawMaterialOriginBannerPointerOnMap = true;
   const visible = show && rawMaterialOriginBannerPointerOnMap;
-  const idx = ui.rawMaterialBranchMap?.materialIndex;
+  const idx = ui.scBranchMap?.branchIndex;
+  const bk = ui.scBranchMap?.kind;
+  const { items } = bk != null ? industryBranchArrays(bk) : { items: state.industry.rawMaterials ?? [] };
   const matName =
-    idx != null ? String(state.industry.rawMaterials[idx] ?? "").trim() || "this material" : "this material";
+    idx != null
+      ? String(items[idx] ?? "").trim() ||
+        (bk === BRANCH_KIND_PRODUCT ? "this product" : "this material")
+      : "this material";
   el.textContent = `Please Mark the Originating Location for ${matName}`;
   el.classList.toggle("is-hidden", !visible);
   el.setAttribute("aria-hidden", visible ? "false" : "true");
@@ -2093,13 +2321,15 @@ function clearLocations() {
     goodsCategoryKeys: [],
     goodsOtherDetail: "",
     rawMaterials: [],
-    rawMaterialBranches: []
+    rawMaterialBranches: [],
+    products: [],
+    productBranches: []
   };
-  ui.rawMaterialBranchMap = null;
-  ui.rawMaterialOriginEditingIndex = null;
-  ui.rawMaterialSupplyChainIntroIndex = null;
-  ui.rawMaterialSupplyChainDiagramIndex = null;
-  ui.rawMaterialTripFrequencyMaterialIndex = null;
+  ui.scBranchMap = null;
+  ui.scOriginIndex = null;
+  ui.scIntroIndex = null;
+  ui.scDiagramIndex = null;
+  ui.scTripFreqIndex = null;
   resetSupplyChainRouteDraft();
   document.getElementById("roleGate")?.classList.remove("is-open");
   document.getElementById("goodsGate")?.classList.remove("is-open");
@@ -2107,10 +2337,12 @@ function clearLocations() {
   document.getElementById("rawMaterialSupplyChainIntroGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialTripFrequencyGate")?.classList.remove("is-open");
+  document.getElementById("participantProductsGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialOriginGate")?.classList.remove("is-open");
   syncParticipantMapGateOverlay();
   layers.locations.clearLayers();
   if (layers.supplyChainRoutes) layers.supplyChainRoutes.clearLayers();
+  if (layers.supplyChainDestinations) layers.supplyChainDestinations.clearLayers();
   if (layers.supplyChainDraft) layers.supplyChainDraft.clearLayers();
   saveState();
   uiUpdateStats();
@@ -2271,6 +2503,37 @@ function exportAllDataCSVFromState(stateObj, participantMeta = null) {
   } catch {
     industryRawMaterialBranchesJson = "";
   }
+  const industryProducts = Array.isArray(stateObj.industry?.products)
+    ? stateObj.industry.products.join("|")
+    : "";
+  let industryProductBranchesJson = "";
+  try {
+    const prods = stateObj.industry?.products ?? [];
+    const br = stateObj.industry?.productBranches ?? [];
+    industryProductBranchesJson = JSON.stringify(
+      prods.map((label, i) => {
+        const b = br[i] || {};
+        return {
+          product: String(label ?? "").trim(),
+          origin: b.originCategoryKey ?? "",
+          originOther: String(b.originOtherDetail ?? ""),
+          originX: typeof b.originX === "number" ? b.originX : null,
+          originY: typeof b.originY === "number" ? b.originY : null,
+          originMapSkipped: Boolean(b.originMapSkipped),
+          supplyChainIntroAcknowledged: Boolean(b.supplyChainIntroAcknowledged),
+          supplyChainDiagram: b.supplyChainDiagram
+            ? normalizeSupplyChainDiagram(b.supplyChainDiagram)
+            : null,
+          supplyChainTransportRoutes: normalizeSupplyChainTransportRoutesForBranch(
+            b.supplyChainTransportRoutes,
+            b.supplyChainDiagram
+          )
+        };
+      })
+    );
+  } catch {
+    industryProductBranchesJson = "";
+  }
   const baseHeader = [
     "record_type",
     "section",
@@ -2300,6 +2563,8 @@ function exportAllDataCSVFromState(stateObj, participantMeta = null) {
           "industry_goods_other",
           "industry_raw_materials",
           "industry_raw_material_branches_json",
+          "industry_products",
+          "industry_product_branches_json",
           ...baseHeader
         ]
       : baseHeader
@@ -2315,7 +2580,9 @@ function exportAllDataCSVFromState(stateObj, participantMeta = null) {
         industryGoodsKeys,
         industryGoodsOther,
         industryRawMaterials,
-        industryRawMaterialBranchesJson
+        industryRawMaterialBranchesJson,
+        industryProducts,
+        industryProductBranchesJson
       ]
     : [];
 
@@ -2450,7 +2717,7 @@ async function exportAllParticipantsCSV() {
   }
   const list = await res.json();
   const headerRow =
-    "participant_id,participant_label,industry_company,industry_role,industry_role_detail,industry_goods_keys,industry_goods_other,industry_raw_materials,industry_raw_material_branches_json,record_type,section,location_type,id,x_2263,y_2263,lat,lng,route_mode,route_mode_key,length_miles,transfer_applied_gold,transfer_cost_gold,segment_cost_gold,section_total_cost_gold_after";
+    "participant_id,participant_label,industry_company,industry_role,industry_role_detail,industry_goods_keys,industry_goods_other,industry_raw_materials,industry_raw_material_branches_json,industry_products,industry_product_branches_json,record_type,section,location_type,id,x_2263,y_2263,lat,lng,route_mode,route_mode_key,length_miles,transfer_applied_gold,transfer_cost_gold,segment_cost_gold,section_total_cost_gold_after";
   const chunks = [headerRow];
   for (const p of list) {
     const r = await fetch(`/api/conductor/participants/${encodeURIComponent(p.id)}`);
@@ -2583,6 +2850,7 @@ function setupMap() {
     pendingLocation: L.layerGroup(),
     currentRoutes: L.layerGroup(),
     supplyChainRoutes: L.layerGroup(),
+    supplyChainDestinations: L.layerGroup(),
     supplyChainDraft: L.layerGroup(),
     ibxLine: L.layerGroup(),
     ibxStations: L.layerGroup(),
@@ -2593,6 +2861,7 @@ function setupMap() {
   layers.pendingLocation.addTo(map);
   layers.currentRoutes.addTo(map);
   layers.supplyChainRoutes.addTo(map);
+  layers.supplyChainDestinations.addTo(map);
   layers.supplyChainDraft.addTo(map);
   layers.ibxRoutes.addTo(map);
   // ibxLine is only shown when user enters Step 3 (handled in setStep()).
@@ -2600,7 +2869,7 @@ function setupMap() {
   map.on("mousemove", (e) => {
     if (readOnly) return;
     if (SURVEY_MODE !== "participant" || ui.activeStep !== "locations") return;
-    const dr = ui.rawMaterialSupplyChainRouteDrawing;
+    const dr = ui.scRouteDrawing;
     if (!dr) return;
     dr.previewCursorLatLng = e.latlng;
     updateSupplyChainRoutePreview();
@@ -2615,7 +2884,7 @@ function setupMap() {
 
   map.on("mouseout", () => {
     if (readOnly) return;
-    const dr = ui.rawMaterialSupplyChainRouteDrawing;
+    const dr = ui.scRouteDrawing;
     if (!dr) return;
     dr.previewCursorLatLng = null;
     updateSupplyChainRoutePreview();
@@ -2632,7 +2901,7 @@ function setupMap() {
     if (
       SURVEY_MODE === "participant" &&
       ui.activeStep === "locations" &&
-      ui.rawMaterialSupplyChainRouteDrawing
+      ui.scRouteDrawing
     ) {
       appendSupplyChainTransportRoutePoint(e.latlng);
       return;
@@ -2649,9 +2918,9 @@ function setupMap() {
       SURVEY_MODE === "participant" &&
       !readOnly &&
       ui.activeStep === "locations" &&
-      ui.rawMaterialBranchMap !== null
+      ui.scBranchMap !== null
     ) {
-      setPendingRawMaterialOrigin(ui.rawMaterialBranchMap.materialIndex, e.latlng);
+      setPendingBranchOrigin(ui.scBranchMap.kind, ui.scBranchMap.branchIndex, e.latlng);
       return;
     }
 
@@ -2712,19 +2981,27 @@ function setParticipantMapHintAfterIndustryGate() {
   try {
     if (!hintEl) return;
 
-    if (SURVEY_MODE === "participant" && ui.rawMaterialBranchMap !== null) {
-      const idx = ui.rawMaterialBranchMap.materialIndex;
-      const name = String(state.industry.rawMaterials[idx] ?? "").trim() || "this material";
+    if (SURVEY_MODE === "participant" && ui.scBranchMap !== null) {
+      const bk = ui.scBranchMap.kind;
+      const idx = ui.scBranchMap.branchIndex;
+      const { items } = industryBranchArrays(bk);
+      const name =
+        String(items[idx] ?? "").trim() || (bk === BRANCH_KIND_PRODUCT ? "this product" : "this material");
       ui.locationType = "none";
       hintEl.textContent = `Originating location for “${name}”: click the map to place a point, then confirm with √ or cancel with ×. You can also skip if you don't know the location.`;
       syncRawMaterialOriginMapSkipVisibility();
       return;
     }
 
-    if (SURVEY_MODE === "participant" && ui.rawMaterialSupplyChainRouteDrawing) {
-      const dr = ui.rawMaterialSupplyChainRouteDrawing;
-      const name = String(state.industry.rawMaterials[dr.materialIndex] ?? "").trim() || "this material";
-      const d = normalizeSupplyChainDiagram(state.industry.rawMaterialBranches[dr.materialIndex]?.supplyChainDiagram);
+    if (SURVEY_MODE === "participant" && ui.scRouteDrawing) {
+      const dr = ui.scRouteDrawing;
+      const { items, branchesKey } = industryBranchArrays(dr.branchKind);
+      const name =
+        String(items[dr.branchIndex] ?? "").trim() ||
+        (dr.branchKind === BRANCH_KIND_PRODUCT ? "this product" : "this material");
+      const d = normalizeSupplyChainDiagram(
+        state.industry[branchesKey][dr.branchIndex]?.supplyChainDiagram
+      );
       const leg = d.transportLegs[dr.legIndex];
       const modeLab = formatSupplyChainTransportModeLabel(leg);
       const tn = dr.legIndex + 1;
@@ -2774,7 +3051,8 @@ function syncParticipantMapGateOverlay() {
       rawMatSupplyIntro?.classList.contains("is-open") ||
       rawMatSupplyDiagram?.classList.contains("is-open") ||
       rawMatOrigin?.classList.contains("is-open") ||
-      rawMatTripFreq?.classList.contains("is-open")
+      rawMatTripFreq?.classList.contains("is-open") ||
+      document.getElementById("participantProductsGate")?.classList.contains("is-open")
   );
   mapWrap.classList.toggle("map-gate-open", anyOpen);
   if (anyOpen) document.body.dataset.mapGateOpen = "1";
@@ -2792,7 +3070,7 @@ function syncRawMaterialOriginMapSkipVisibility() {
     SURVEY_MODE === "participant" &&
     !readOnly &&
     ui.activeStep === "locations" &&
-    ui.rawMaterialBranchMap !== null;
+    ui.scBranchMap !== null;
   wrap.classList.toggle("is-hidden", !show);
   wrap.setAttribute("aria-hidden", show ? "false" : "true");
 }
@@ -2855,6 +3133,14 @@ function participantNeedsRawMaterialsGate() {
 function formatParticipantRawMaterialsSummary(industry) {
   const ind = industry ?? state.industry;
   const arr = ind?.rawMaterials;
+  if (!Array.isArray(arr)) return "";
+  const parts = arr.map((s) => String(s ?? "").trim()).filter(Boolean);
+  return parts.length ? parts.join("; ") : "";
+}
+
+function formatParticipantProductsSummary(industry) {
+  const ind = industry ?? state.industry;
+  const arr = ind?.products;
   if (!Array.isArray(arr)) return "";
   const parts = arr.map((s) => String(s ?? "").trim()).filter(Boolean);
   return parts.length ? parts.join("; ") : "";
@@ -3149,7 +3435,7 @@ function maybeOpenParticipantGoodsGate() {
   if (participantNeedsGoodsGate()) openParticipantGoodsGate();
 }
 
-function appendRawMaterialRowToList(container, value = "") {
+function appendRawMaterialRowToList(container, value = "", placeholder = "Raw material") {
   const row = document.createElement("div");
   row.className = "rawMaterialsRow";
   row.setAttribute("role", "listitem");
@@ -3159,7 +3445,7 @@ function appendRawMaterialRowToList(container, value = "") {
   input.className = "goodsGate__input";
   input.maxLength = 200;
   input.autocomplete = "off";
-  input.placeholder = "Raw material";
+  input.placeholder = placeholder;
   input.value = value;
 
   const rm = document.createElement("button");
@@ -3196,6 +3482,74 @@ function openParticipantRawMaterialsGate() {
 
   requestAnimationFrame(() => {
     list.querySelector("input")?.focus();
+  });
+}
+
+function openParticipantProductsGate() {
+  const gate = document.getElementById("participantProductsGate");
+  const list = document.getElementById("productsList");
+  if (!gate || !list) return;
+  gate.classList.add("is-open");
+  syncParticipantMapGateOverlay();
+
+  list.innerHTML = "";
+  const saved = state.industry?.products;
+  const hasSaved = Array.isArray(saved) && saved.some((s) => String(s ?? "").trim());
+  const seeds = hasSaved ? saved.map((s) => String(s ?? "")) : [""];
+  for (const v of seeds) appendRawMaterialRowToList(list, v, "Product");
+
+  requestAnimationFrame(() => {
+    list.querySelector("input")?.focus();
+  });
+}
+
+function initParticipantProductsGateOnce() {
+  if (SURVEY_MODE !== "participant" || document.body.dataset.participantProductsGateBound === "1") return;
+  const gate = document.getElementById("participantProductsGate");
+  const list = document.getElementById("productsList");
+  const addBtn = document.getElementById("productsAddBtn");
+  const btn = document.getElementById("productsContinueBtn");
+  if (!gate || !list) return;
+  document.body.dataset.participantProductsGateBound = "1";
+
+  addBtn?.addEventListener("click", () => {
+    if (list.querySelectorAll(".rawMaterialsRow").length >= 40) {
+      window.alert("You can add up to 40 products.");
+      return;
+    }
+    appendRawMaterialRowToList(list, "", "Product");
+    list.querySelector(".rawMaterialsRow:last-of-type input")?.focus();
+  });
+
+  btn?.addEventListener("click", () => {
+    const inputs = list.querySelectorAll(".rawMaterialsRow input");
+    const raw = [];
+    inputs.forEach((el) => {
+      const t = String(el.value ?? "").trim();
+      if (t) raw.push(t);
+    });
+    if (raw.length === 0) {
+      window.alert("Please enter at least one product.");
+      return;
+    }
+    state.industry = {
+      ...state.industry,
+      products: normalizeProductsFromPayload(raw)
+    };
+    ensureProductBranchesAligned();
+    gate.classList.remove("is-open");
+    syncParticipantMapGateOverlay();
+    void flushSaveToServer();
+    rebuildFromState();
+    uiUpdateStats();
+    setParticipantMapHintAfterIndustryGate();
+    if (map) {
+      requestAnimationFrame(() => map.invalidateSize());
+      setTimeout(() => map.invalidateSize(), 200);
+    }
+    if (state.industry.products.length > 0) {
+      resumeParticipantSupplyChainFlow();
+    }
   });
 }
 
@@ -3244,7 +3598,7 @@ function initParticipantRawMaterialsGateOnce() {
       setTimeout(() => map.invalidateSize(), 200);
     }
     if (state.industry.rawMaterials.length > 0) {
-      resumeRawMaterialBranchFlow();
+      resumeParticipantSupplyChainFlow();
     }
   });
 }
@@ -3271,51 +3625,96 @@ function participantRawMaterialBranchWorkIncomplete() {
   return false;
 }
 
-function resumeRawMaterialBranchFlow() {
+function participantProductsIsComplete() {
+  const arr = state.industry?.products;
+  if (!Array.isArray(arr)) return false;
+  return arr.some((s) => String(s ?? "").trim().length > 0);
+}
+
+function participantProductBranchWorkIncomplete() {
+  if (SURVEY_MODE !== "participant") return false;
+  if (!participantProductsIsComplete()) return false;
+  const mats = state.industry.products ?? [];
+  if (mats.length === 0) return false;
+  ensureProductBranchesAligned();
+  for (let i = 0; i < mats.length; i++) {
+    const b = state.industry.productBranches[i];
+    if (rawMaterialSupplyChainBranchNeedsIntroGate(b)) return true;
+    if (rawMaterialOriginBranchNeedsCategoryGate(b)) return true;
+    if (rawMaterialOriginBranchNeedsMap(b)) return true;
+    if (rawMaterialSupplyChainBranchNeedsDiagramGate(b)) return true;
+    if (rawMaterialSupplyChainBranchNeedsTransportRoutes(b)) return true;
+    if (rawMaterialSupplyChainBranchNeedsTripFrequencyGate(b)) return true;
+  }
+  return false;
+}
+
+function participantAnySupplyChainBranchWorkIncomplete() {
+  return participantRawMaterialBranchWorkIncomplete() || participantProductBranchWorkIncomplete();
+}
+
+function participantNeedsProductsGate() {
+  return (
+    SURVEY_MODE === "participant" &&
+    participantHasWorkplaceLocation() &&
+    participantIndustryRoleIsComplete() &&
+    participantGoodsIsComplete() &&
+    participantRawMaterialsIsComplete() &&
+    !participantRawMaterialBranchWorkIncomplete() &&
+    !participantProductsIsComplete()
+  );
+}
+
+function resumeSupplyChainBranchFlowForKind(kind) {
+  const { items, ensure, branchesKey } = industryBranchArrays(kind);
+  const workIncomplete =
+    kind === BRANCH_KIND_PRODUCT ? participantProductBranchWorkIncomplete() : participantRawMaterialBranchWorkIncomplete();
   try {
-    if (!participantRawMaterialBranchWorkIncomplete()) {
-      ui.rawMaterialBranchMap = null;
-      ui.rawMaterialOriginEditingIndex = null;
-      ui.rawMaterialSupplyChainDiagramIndex = null;
-      ui.rawMaterialTripFrequencyMaterialIndex = null;
+    if (!workIncomplete) {
+      ui.scIntroIndex = null;
+      ui.scBranchMap = null;
+      ui.scOriginIndex = null;
+      ui.scDiagramIndex = null;
+      ui.scTripFreqIndex = null;
       resetSupplyChainRouteDraft();
       document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.remove("is-open");
       document.getElementById("rawMaterialTripFrequencyGate")?.classList.remove("is-open");
       return;
     }
-    ensureRawMaterialBranchesAligned();
-    const mats = state.industry.rawMaterials ?? [];
-    for (let i = 0; i < mats.length; i++) {
-      const b = state.industry.rawMaterialBranches[i];
+    ui.scKind = kind;
+    ensure();
+    const branches = state.industry[branchesKey];
+    for (let i = 0; i < items.length; i++) {
+      const b = branches[i];
       if (rawMaterialSupplyChainBranchNeedsIntroGate(b)) {
-        openRawMaterialSupplyChainIntroGate(i);
+        openSupplyChainIntroGate(kind, i);
         return;
       }
       if (rawMaterialOriginBranchNeedsCategoryGate(b)) {
-        openRawMaterialOriginQuestionGate(i);
+        openOriginQuestionGate(kind, i);
         return;
       }
       if (rawMaterialOriginBranchNeedsMap(b)) {
-        ui.rawMaterialBranchMap = { materialIndex: i };
-        ui.rawMaterialOriginEditingIndex = null;
+        ui.scBranchMap = { kind, branchIndex: i };
+        ui.scOriginIndex = null;
         syncParticipantMapGateOverlay();
         setParticipantMapHintAfterIndustryGate();
         return;
       }
       if (rawMaterialSupplyChainBranchNeedsDiagramGate(b)) {
-        openRawMaterialSupplyChainDiagramGate(i);
+        openSupplyChainDiagramGate(kind, i);
         return;
       }
       if (rawMaterialSupplyChainBranchNeedsTransportRoutes(b)) {
-        ui.rawMaterialBranchMap = null;
-        ui.rawMaterialOriginEditingIndex = null;
-        startSupplyChainTransportRouteDrawing(i);
+        ui.scBranchMap = null;
+        ui.scOriginIndex = null;
+        startSupplyChainTransportRouteDrawing(kind, i);
         syncParticipantMapGateOverlay();
         setParticipantMapHintAfterIndustryGate();
         return;
       }
       if (rawMaterialSupplyChainBranchNeedsTripFrequencyGate(b)) {
-        openRawMaterialTripFrequencyGate(i);
+        openTripFrequencyGate(kind, i);
         return;
       }
     }
@@ -3324,13 +3723,45 @@ function resumeRawMaterialBranchFlow() {
   }
 }
 
+function resumeParticipantSupplyChainFlow() {
+  try {
+    if (participantRawMaterialBranchWorkIncomplete()) {
+      resumeSupplyChainBranchFlowForKind(BRANCH_KIND_RAW);
+      return;
+    }
+    if (participantNeedsProductsGate()) {
+      openParticipantProductsGate();
+      return;
+    }
+    if (participantProductBranchWorkIncomplete()) {
+      resumeSupplyChainBranchFlowForKind(BRANCH_KIND_PRODUCT);
+      return;
+    }
+    ui.scIntroIndex = null;
+    ui.scBranchMap = null;
+    ui.scOriginIndex = null;
+    ui.scDiagramIndex = null;
+    ui.scTripFreqIndex = null;
+    resetSupplyChainRouteDraft();
+    document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.remove("is-open");
+    document.getElementById("rawMaterialTripFrequencyGate")?.classList.remove("is-open");
+    document.getElementById("participantProductsGate")?.classList.remove("is-open");
+  } finally {
+    syncParticipantLeftPanel();
+  }
+}
+
+function resumeRawMaterialBranchFlow() {
+  resumeSupplyChainBranchFlowForKind(BRANCH_KIND_RAW);
+}
+
 function advanceAfterRawMaterialOriginPlaced(completedIndex) {
   void completedIndex;
-  resumeRawMaterialBranchFlow();
-  if (!participantRawMaterialBranchWorkIncomplete()) {
-    ui.rawMaterialBranchMap = null;
-    ui.rawMaterialOriginEditingIndex = null;
-    ui.rawMaterialSupplyChainDiagramIndex = null;
+  resumeParticipantSupplyChainFlow();
+  if (!participantAnySupplyChainBranchWorkIncomplete()) {
+    ui.scBranchMap = null;
+    ui.scOriginIndex = null;
+    ui.scDiagramIndex = null;
     syncParticipantMapGateOverlay();
     setParticipantMapHintAfterIndustryGate();
     void flushSaveToServer();
@@ -3383,6 +3814,55 @@ function supplyChainLocationSelectHtml(selectedKey) {
   return opts;
 }
 
+function rawMaterialOriginSelectHtml(selectedKey) {
+  return [`<option value="">Select…</option>`]
+    .concat(
+      RAW_MATERIAL_ORIGIN_OPTIONS.map((o) => {
+        const sel = o.key === selectedKey ? " selected" : "";
+        return `<option value="${escapeHtml(o.key)}"${sel}>${escapeHtml(o.label)}</option>`;
+      })
+    )
+    .join("");
+}
+
+/** Read sidebar origin controls (participant left diagram only). */
+function readOriginFieldsFromDiagramMount(mount) {
+  const sel = mount?.querySelector('[data-sc="origin-category"]');
+  if (!sel) return null;
+  const key = String(sel.value ?? "").trim();
+  const other = String(mount.querySelector('[data-sc="origin-other"]')?.value ?? "").trim();
+  return { originCategoryKey: key, originOtherDetail: key === "other" ? other : "" };
+}
+
+/**
+ * Apply origin edits from the left diagram. On change: clear map coords and routes (same as origin gate).
+ * Returns { row, setMap, error }.
+ */
+function applyOriginFromLeftDiagramToRow(row, nextDiagram, o) {
+  const key = o.originCategoryKey;
+  const otherNorm = key === "other" ? String(o.originOtherDetail ?? "").trim() : "";
+  if (!key) return { row, setMap: false, error: "Please select an originating location type." };
+  if (key === "other" && !otherNorm) return { row, setMap: false, error: 'Please specify for "Others".' };
+  const originChanged =
+    row.originCategoryKey !== key ||
+    (key === "other" && String(row.originOtherDetail ?? "").trim() !== otherNorm);
+  if (!originChanged) return { row, setMap: false };
+  return {
+    row: {
+      ...row,
+      originCategoryKey: key,
+      originOtherDetail: otherNorm,
+      originMapSkipped: false,
+      originX: null,
+      originY: null,
+      tripFrequencyCount: null,
+      tripFrequencyPeriod: "",
+      supplyChainTransportRoutes: normalizeSupplyChainTransportRoutesForBranch([], nextDiagram)
+    },
+    setMap: true
+  };
+}
+
 function supplyChainModalSelectHtml(selectedKey, allowedKeys = null) {
   const opts = [`<option value="">Select…</option>`]
     .concat(
@@ -3425,14 +3905,34 @@ function originIconSrcForSupplyChain(b) {
   return ORIGIN_TYPE_ICONS[k] ?? ORIGIN_TYPE_ICONS.storage_facility;
 }
 
-function collectSupplyChainDiagramFromMount(materialIndex, mountId = "rawMaterialSupplyChainDiagramMount") {
+/** Static img src for destination row in supply-chain diagram (matches map destination icon set). */
+function destinationIconSrcForSupplyChainDiagram(dIn) {
+  const d = normalizeSupplyChainDiagram(dIn ?? {});
+  const k = normalizeSupplyLocationKeyForDiagram(d.destinationCategoryKey);
+  if (!k) return ORIGIN_TYPE_ICONS.storage_facility;
+  if (k === "other") return ORIGIN_TYPE_ICONS.distribution_center;
+  return ORIGIN_TYPE_ICONS[k] ?? ORIGIN_TYPE_ICONS.storage_facility;
+}
+
+function collectSupplyChainDiagramFromMount(
+  materialIndex,
+  mountId = "rawMaterialSupplyChainDiagramMount",
+  branchKind = BRANCH_KIND_RAW
+) {
   const mount = document.getElementById(mountId);
   if (!mount) return null;
-  ensureRawMaterialBranchesAligned();
-  const br = state.industry.rawMaterialBranches[materialIndex];
+  const { ensure, branchesKey } = industryBranchArrays(branchKind);
+  ensure();
+  const br = state.industry[branchesKey][materialIndex];
   if (!br) return null;
-  const destCat = mount.querySelector('[data-sc="destination-category"]')?.value ?? "";
-  const destOther = mount.querySelector('[data-sc="destination-other"]')?.value ?? "";
+  const destCatEl = mount.querySelector('[data-sc="destination-category"]');
+  const destOtherEl = mount.querySelector('[data-sc="destination-other"]');
+  const destCat = destCatEl
+    ? String(destCatEl.value ?? "").trim()
+    : normalizeSupplyLocationKeyForDiagram(br.supplyChainDiagram?.destinationCategoryKey);
+  const destOther = destOtherEl
+    ? String(destOtherEl.value ?? "").trim()
+    : String(br.supplyChainDiagram?.destinationOtherDetail ?? "");
   const modalSels = [...mount.querySelectorAll("[data-sc-modal-node]")].sort(
     (a, b) =>
       Number(a.getAttribute("data-sc-modal-node")) - Number(b.getAttribute("data-sc-modal-node"))
@@ -3513,10 +4013,12 @@ function bindSupplyChainDiagramTrackLayout(mountEl) {
 function renderSupplyChainDiagramMount(materialIndex, options = {}) {
   const mountId = options.mountId ?? "rawMaterialSupplyChainDiagramMount";
   const readOnly = options.readOnly === true;
+  const branchKind = options.branchKind ?? BRANCH_KIND_RAW;
+  const { ensure, branchesKey, items } = industryBranchArrays(branchKind);
   const mount = document.getElementById(mountId);
   if (!mount) return;
-  ensureRawMaterialBranchesAligned();
-  const br = state.industry.rawMaterialBranches[materialIndex];
+  ensure();
+  const br = state.industry[branchesKey][materialIndex];
   if (!br) return;
   let d = applySupplyChainDiagramConstraints(br.supplyChainDiagram ?? defaultSupplyChainDiagram());
   if (!readOnly) {
@@ -3525,7 +4027,9 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
   mount.classList.toggle("supplyChainDiagramMount--sidebarReadonly", readOnly);
   const nodes = d.modalChangeNodes;
   const legs = d.transportLegs;
-  const matLabel = String(state.industry.rawMaterials[materialIndex] ?? "").trim() || "this material";
+  const matLabel =
+    String(items[materialIndex] ?? "").trim() ||
+    (branchKind === BRANCH_KIND_PRODUCT ? "this product" : "this material");
   const showTripFreqLeft =
     mountId === "participantLeftDiagramMount" &&
     SURVEY_MODE === "participant" &&
@@ -3534,26 +4038,59 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
     isTripFrequencyComplete(br);
   const originSummary = formatOriginLabelForSupplyChainABranch(br);
   const originIcon = originIconSrcForSupplyChain(br);
+  const destIconSrc = destinationIconSrcForSupplyChainDiagram(d);
+  const destSummaryText = formatSupplyChainDestinationDesc(d);
   const showRedrawButtons = mountId === "participantLeftDiagramMount" && SURVEY_MODE === "participant" && !readOnly;
+  const allowLeftOriginEdit =
+    mountId === "participantLeftDiagramMount" &&
+    SURVEY_MODE === "participant" &&
+    !readOnly &&
+    br.originCategoryKey !== RAW_MATERIAL_ORIGIN_SKIPPED_KEY;
 
   const parts = [];
   parts.push(`<div class="supplyChainDiagram__flow">`);
   parts.push(`<div class="supplyChainDiagram__track" aria-hidden="true"></div>`);
   parts.push(`<div class="supplyChainDiagram__flowInner">`);
 
-  // A — mirrored from first branch (read-only)
+  // A — read-only in modal / while drawing route on map; editable on participant left when branch not skipped
   parts.push(`<div class="supplyChainDiagram__row supplyChainDiagram__row--a">`);
   parts.push(`<div class="supplyChainDiagram__nodeDot" aria-hidden="true">A</div>`);
   parts.push(`<div class="supplyChainDiagram__fields">`);
-  parts.push(`<div class="supplyChainDiagram__fieldLabel">Originating Location</div>`);
-  parts.push(
-    `<div class="supplyChainDiagram__readonly"><img class="supplyChainDiagram__icon" src="${originIcon}" alt=""/> <span>${originSummary}</span></div>`
-  );
-  parts.push(
-    readOnly
-      ? `<p class="supplyChainDiagram__hint">Reference while you draw each transportation leg on the map.</p>`
-      : `<p class="supplyChainDiagram__hint">Same as your answer for where ${escapeHtml(matLabel)} originates.</p>`
-  );
+  if (allowLeftOriginEdit) {
+    parts.push(`<div class="supplyChainDiagram__fieldLabel supplyChainDiagram__fieldLabel--withIcon">`);
+    parts.push(`<img class="supplyChainDiagram__icon" src="${originIcon}" alt="" aria-hidden="true"/>`);
+    parts.push(`<span>Originating Location</span>`);
+    parts.push(`</div>`);
+    const showOriginOther = br.originCategoryKey === "other";
+    parts.push(
+      `<select class="goodsGate__input supplyChainDiagram__select" data-sc="origin-category" aria-label="Originating location type">`
+    );
+    parts.push(rawMaterialOriginSelectHtml(br.originCategoryKey));
+    parts.push(`</select>`);
+    parts.push(
+      `<div class="goodsOtherWrap supplyChainDiagram__otherWrap${showOriginOther ? "" : " is-hidden"}" data-sc="origin-other-wrap">`
+    );
+    parts.push(
+      `<input type="text" class="goodsGate__input" data-sc="origin-other" maxlength="300" placeholder="Specify origin" value="${escapeHtml(br.originOtherDetail)}" />`
+    );
+    parts.push(`</div>`);
+    parts.push(
+      `<div class="supplyChainDiagram__originMapRow"><button type="button" class="ghostBtn supplyChainDiagram__originMapBtn" data-sc="origin-place-map">Place on map</button></div>`
+    );
+    parts.push(
+      `<p class="supplyChainDiagram__hint">Changing the type clears drawn transportation routes. Use Place on map to set or move the origin pin.</p>`
+    );
+  } else {
+    parts.push(`<div class="supplyChainDiagram__fieldLabel">Originating Location</div>`);
+    parts.push(
+      `<div class="supplyChainDiagram__readonly"><img class="supplyChainDiagram__icon" src="${originIcon}" alt=""/> <span>${originSummary}</span></div>`
+    );
+    parts.push(
+      readOnly
+        ? `<p class="supplyChainDiagram__hint">Reference while you draw each transportation leg on the map.</p>`
+        : `<p class="supplyChainDiagram__hint">Same as your answer for where ${escapeHtml(matLabel)} originates.</p>`
+    );
+  }
   parts.push(`</div></div>`);
 
   // Transport legs and B nodes: leg[0] … leg[n] for n nodes
@@ -3641,7 +4178,7 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
     }
   }
 
-  // C — destination
+  // C — destination (icon matches map markers; modal + left panel use same markup)
   const dk = d.destinationCategoryKey;
   const showDOther = dk === "other";
   const destDisabled = readOnly ? " disabled" : "";
@@ -3649,19 +4186,33 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
   parts.push(`<div class="supplyChainDiagram__row supplyChainDiagram__row--c">`);
   parts.push(`<div class="supplyChainDiagram__nodeDot" aria-hidden="true">C</div>`);
   parts.push(`<div class="supplyChainDiagram__fields">`);
-  parts.push(`<div class="supplyChainDiagram__fieldLabel">Destination</div>`);
-  parts.push(
-    `<select class="goodsGate__input supplyChainDiagram__select" data-sc="destination-category" aria-label="Destination"${destDisabled}>`
-  );
-  parts.push(supplyChainLocationSelectHtml(dk));
-  parts.push(`</select>`);
-  parts.push(
-    `<div class="goodsOtherWrap supplyChainDiagram__otherWrap${showDOther ? "" : " is-hidden"}" data-sc-dest-other-wrap>`
-  );
-  parts.push(
-    `<input type="text" class="goodsGate__input" data-sc="destination-other" maxlength="300" placeholder="Specify destination" value="${escapeHtml(d.destinationOtherDetail)}"${dInputRo} />`
-  );
-  parts.push(`</div>`);
+  if (readOnly) {
+    parts.push(`<div class="supplyChainDiagram__fieldLabel">Destination</div>`);
+    parts.push(
+      `<div class="supplyChainDiagram__readonly"><img class="supplyChainDiagram__icon" src="${escapeHtml(
+        destIconSrc
+      )}" alt="" aria-hidden="true"/> <span>${escapeHtml(destSummaryText)}</span></div>`
+    );
+  } else {
+    parts.push(`<div class="supplyChainDiagram__fieldLabel supplyChainDiagram__fieldLabel--withIcon">`);
+    parts.push(
+      `<img class="supplyChainDiagram__icon supplyChainDiagram__icon--destination" src="${escapeHtml(destIconSrc)}" alt="" aria-hidden="true"/>`
+    );
+    parts.push(`<span>Destination</span>`);
+    parts.push(`</div>`);
+    parts.push(
+      `<select class="goodsGate__input supplyChainDiagram__select" data-sc="destination-category" aria-label="Destination"${destDisabled}>`
+    );
+    parts.push(supplyChainLocationSelectHtml(dk));
+    parts.push(`</select>`);
+    parts.push(
+      `<div class="goodsOtherWrap supplyChainDiagram__otherWrap${showDOther ? "" : " is-hidden"}" data-sc-dest-other-wrap>`
+    );
+    parts.push(
+      `<input type="text" class="goodsGate__input" data-sc="destination-other" maxlength="300" placeholder="Specify destination" value="${escapeHtml(d.destinationOtherDetail)}"${dInputRo} />`
+    );
+    parts.push(`</div>`);
+  }
   parts.push(`</div></div>`);
 
   if (showTripFreqLeft) {
@@ -3695,10 +4246,31 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
 
   if (!readOnly) {
     const applyDiagram = (nextD) => {
-      ensureRawMaterialBranchesAligned();
-      const row = state.industry.rawMaterialBranches[materialIndex];
+      ensure();
+      let row = state.industry[branchesKey][materialIndex];
       if (!row) return;
       const nextDiagram = applySupplyChainDiagramConstraints(nextD);
+      const mid = options.mountId ?? "rawMaterialSupplyChainDiagramMount";
+      const mountEl = document.getElementById(mid);
+      if (mid === "participantLeftDiagramMount" && mountEl) {
+        const o = readOriginFieldsFromDiagramMount(mountEl);
+        if (o) {
+          const res = applyOriginFromLeftDiagramToRow(row, nextDiagram, o);
+          if (res.error) {
+            window.alert(res.error);
+            renderSupplyChainDiagramMount(materialIndex, options);
+            return;
+          }
+          row = res.row;
+          if (res.setMap) {
+            ui.scKind = branchKind;
+            ui.scBranchMap = { kind: branchKind, branchIndex: materialIndex };
+            ui.scOriginIndex = null;
+            setParticipantMapHintAfterIndustryGate();
+            syncParticipantMapGateOverlay();
+          }
+        }
+      }
       const nextRoutes = normalizeSupplyChainTransportRoutesForBranch(row.supplyChainTransportRoutes, nextDiagram);
       const merged = { ...row, supplyChainDiagram: nextDiagram, supplyChainTransportRoutes: nextRoutes };
       const routesOk = isSupplyChainTransportRoutesComplete(merged);
@@ -3708,7 +4280,7 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
         tripFrequencyCount = null;
         tripFrequencyPeriod = "";
       }
-      state.industry.rawMaterialBranches[materialIndex] = {
+      state.industry[branchesKey][materialIndex] = {
         ...merged,
         tripFrequencyCount,
         tripFrequencyPeriod
@@ -3719,9 +4291,9 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
     /** Merge current form fields from the DOM into state before changing structure. */
     function snapshotDiagramFromDomOrState() {
       const mid = options.mountId ?? "rawMaterialSupplyChainDiagramMount";
-      const fromDom = collectSupplyChainDiagramFromMount(materialIndex, mid);
+      const fromDom = collectSupplyChainDiagramFromMount(materialIndex, mid, branchKind);
       if (fromDom) return fromDom;
-      const row = state.industry.rawMaterialBranches[materialIndex];
+      const row = state.industry[branchesKey][materialIndex];
       return row?.supplyChainDiagram
         ? applySupplyChainDiagramConstraints(row.supplyChainDiagram)
         : applySupplyChainDiagramConstraints(defaultSupplyChainDiagram());
@@ -3744,6 +4316,40 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
       const next = snapshotDiagramFromDomOrState();
       applyDiagram(next);
     });
+    mount.querySelector('[data-sc="destination-other"]')?.addEventListener("change", () => {
+      const next = snapshotDiagramFromDomOrState();
+      applyDiagram(next);
+    });
+
+    mount.querySelector('[data-sc="origin-category"]')?.addEventListener("change", () => {
+      const next = snapshotDiagramFromDomOrState();
+      applyDiagram(next);
+    });
+    mount.querySelector('[data-sc="origin-other"]')?.addEventListener("change", () => {
+      const next = snapshotDiagramFromDomOrState();
+      applyDiagram(next);
+    });
+    mount.querySelector('[data-sc="origin-place-map"]')?.addEventListener("click", () => {
+      if ((options.mountId ?? "rawMaterialSupplyChainDiagramMount") !== "participantLeftDiagramMount") return;
+      const o = readOriginFieldsFromDiagramMount(mount);
+      if (!o?.originCategoryKey) {
+        window.alert("Please select an originating location type.");
+        return;
+      }
+      if (o.originCategoryKey === "other" && !String(mount.querySelector('[data-sc="origin-other"]')?.value ?? "").trim()) {
+        window.alert('Please specify for "Others".');
+        return;
+      }
+      applyDiagram(snapshotDiagramFromDomOrState());
+      clearPendingLocation();
+      ui.scKind = branchKind;
+      ui.scBranchMap = { kind: branchKind, branchIndex: materialIndex };
+      ui.scOriginIndex = null;
+      setParticipantMapHintAfterIndustryGate();
+      syncParticipantMapGateOverlay();
+      rebuildFromState();
+      uiUpdateStats();
+    });
 
     mount.querySelectorAll("[data-sc-add-after-leg]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -3762,7 +4368,7 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
         if (btn.disabled) return;
         const li = Number(btn.getAttribute("data-sc-redraw-route-leg"));
         if (Number.isNaN(li)) return;
-        participantRedrawSupplyChainRouteFromLeg(materialIndex, li);
+        participantRedrawSupplyChainRouteFromLeg(branchKind, materialIndex, li);
       });
     });
 
@@ -3770,8 +4376,8 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
       if (mountId !== "participantLeftDiagramMount") return;
       const c = mount.querySelector('[data-trip-freq="count"]');
       const p = mount.querySelector('[data-trip-freq="period"]');
-      ensureRawMaterialBranchesAligned();
-      const row = state.industry.rawMaterialBranches[materialIndex];
+      ensure();
+      const row = state.industry[branchesKey][materialIndex];
       if (!row) return;
       const pv = normalizeTripFrequencyPeriod(p?.value);
       const rawN = String(c?.value ?? "").trim();
@@ -3779,7 +4385,7 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
       const tripFrequencyCount =
         num != null && Number.isFinite(num) && num >= 1 && Math.floor(num) === num ? Math.floor(num) : null;
       const tripFrequencyPeriod = tripFrequencyCount != null ? pv : "";
-      state.industry.rawMaterialBranches[materialIndex] = {
+      state.industry[branchesKey][materialIndex] = {
         ...row,
         tripFrequencyCount,
         tripFrequencyPeriod
@@ -3787,10 +4393,10 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
       void flushSaveToServer();
       rebuildFromState();
       uiUpdateStats();
-      ensureRawMaterialBranchesAligned();
-      const rowAfter = state.industry.rawMaterialBranches[materialIndex];
+      ensure();
+      const rowAfter = state.industry[branchesKey][materialIndex];
       if (rowAfter && rawMaterialSupplyChainBranchNeedsTripFrequencyGate(rowAfter)) {
-        openRawMaterialTripFrequencyGate(materialIndex);
+        openTripFrequencyGate(branchKind, materialIndex);
       }
     };
     mount.querySelector('[data-trip-freq="count"]')?.addEventListener("change", commitTripFreqFromLeft);
@@ -3804,14 +4410,14 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
 }
 
 /**
- * Participant Step 1: raw-material pills + products placeholder + detail diagram.
- * Empty until raw materials list exists; detail needs a selected pill.
+ * Participant left: raw-material pills, product pills (after listed), and shared detail diagram.
  */
 function syncParticipantLeftPanel() {
   if (SURVEY_MODE !== "participant") return;
   const emptyEl = document.getElementById("participantLeftEmpty");
   const shellEl = document.getElementById("participantLeftShell");
   const pillsEl = document.getElementById("participantRawMaterialPills");
+  const productPillsEl = document.getElementById("participantProductPills");
   const detailEl = document.getElementById("participantLeftDetail");
   const detailName = document.getElementById("participantLeftDetailName");
   const placeholderEl = document.getElementById("participantLeftDetailPlaceholder");
@@ -3820,13 +4426,14 @@ function syncParticipantLeftPanel() {
   if (!emptyEl || !shellEl) return;
 
   const mats = state.industry.rawMaterials ?? [];
+  const prods = state.industry.products ?? [];
   const hasMaterials = participantRawMaterialsIsComplete();
+  const hasProducts = participantProductsIsComplete();
 
   if (!hasMaterials) {
     emptyEl.classList.remove("is-hidden");
     emptyEl.setAttribute("aria-hidden", "false");
     shellEl.classList.add("is-hidden");
-    ui.participantSelectedRawMaterialIndex = null;
     if (mountEl) mountEl.innerHTML = "";
     if (saveRow) saveRow.classList.add("is-hidden");
     if (placeholderEl) {
@@ -3840,31 +4447,64 @@ function syncParticipantLeftPanel() {
   emptyEl.setAttribute("aria-hidden", "true");
   shellEl.classList.remove("is-hidden");
 
-  const dr = ui.rawMaterialSupplyChainRouteDrawing;
-  if (dr && dr.materialIndex != null) {
-    ui.participantSelectedRawMaterialIndex = dr.materialIndex;
+  const dr = ui.scRouteDrawing;
+  if (dr && dr.branchIndex != null) {
+    ui.participantLeftPanelKind = dr.branchKind;
+    ui.participantLeftPanelIndex = dr.branchIndex;
   }
 
-  if (mats.length > 0) {
-    if (ui.participantSelectedRawMaterialIndex == null || ui.participantSelectedRawMaterialIndex < 0) {
-      ui.participantSelectedRawMaterialIndex = 0;
-    } else if (ui.participantSelectedRawMaterialIndex >= mats.length) {
-      ui.participantSelectedRawMaterialIndex = mats.length - 1;
+  if (ui.participantLeftPanelKind === BRANCH_KIND_RAW && mats.length > 0) {
+    if (ui.participantLeftPanelIndex < 0 || ui.participantLeftPanelIndex >= mats.length) {
+      ui.participantLeftPanelIndex = 0;
+    }
+  }
+  if (ui.participantLeftPanelKind === BRANCH_KIND_PRODUCT && hasProducts && prods.length > 0) {
+    if (ui.participantLeftPanelIndex < 0 || ui.participantLeftPanelIndex >= prods.length) {
+      ui.participantLeftPanelIndex = 0;
     }
   }
 
   let pillsHtml = "";
   for (let i = 0; i < mats.length; i++) {
     const label = String(mats[i] ?? "").trim() || `Material ${i + 1}`;
-    const active = ui.participantSelectedRawMaterialIndex === i ? " is-active" : "";
+    const active =
+      ui.participantLeftPanelKind === BRANCH_KIND_RAW && ui.participantLeftPanelIndex === i ? " is-active" : "";
     pillsHtml += `<button type="button" class="participantPill${active}" data-participant-rm-index="${i}" role="tab" aria-selected="${
-      ui.participantSelectedRawMaterialIndex === i ? "true" : "false"
+      ui.participantLeftPanelKind === BRANCH_KIND_RAW && ui.participantLeftPanelIndex === i ? "true" : "false"
     }">${escapeHtml(label)}</button>`;
   }
   if (pillsEl) pillsEl.innerHTML = pillsHtml;
 
-  const sel = ui.participantSelectedRawMaterialIndex;
-  if (sel == null || sel < 0 || sel >= mats.length) {
+  if (productPillsEl) {
+    if (!hasProducts) {
+      productPillsEl.innerHTML = `<span class="participantPill participantPill--muted">Your products (supply chain steps) appear here after you list them.</span>`;
+    } else {
+      ensureProductBranchesAligned();
+      let ph = "";
+      for (let i = 0; i < prods.length; i++) {
+        const label = String(prods[i] ?? "").trim() || `Product ${i + 1}`;
+        const active =
+          ui.participantLeftPanelKind === BRANCH_KIND_PRODUCT && ui.participantLeftPanelIndex === i ? " is-active" : "";
+        ph += `<button type="button" class="participantPill${active}" data-participant-product-index="${i}" role="tab" aria-selected="${
+          ui.participantLeftPanelKind === BRANCH_KIND_PRODUCT && ui.participantLeftPanelIndex === i ? "true" : "false"
+        }">${escapeHtml(label)}</button>`;
+      }
+      productPillsEl.innerHTML = ph;
+    }
+  }
+
+  const kind = ui.participantLeftPanelKind;
+  const items = kind === BRANCH_KIND_PRODUCT ? prods : mats;
+  const sel = ui.participantLeftPanelIndex;
+
+  if (kind === BRANCH_KIND_PRODUCT && !hasProducts) {
+    if (detailEl) detailEl.classList.add("is-hidden");
+    if (mountEl) mountEl.innerHTML = "";
+    if (saveRow) saveRow.classList.add("is-hidden");
+    return;
+  }
+
+  if (sel == null || sel < 0 || sel >= items.length) {
     if (detailEl) detailEl.classList.add("is-hidden");
     if (mountEl) mountEl.innerHTML = "";
     if (saveRow) saveRow.classList.add("is-hidden");
@@ -3873,10 +4513,12 @@ function syncParticipantLeftPanel() {
   }
 
   if (detailEl) detailEl.classList.remove("is-hidden");
-  if (detailName) detailName.textContent = String(mats[sel] ?? "").trim() || `Material ${sel + 1}`;
+  const itemLabel =
+    String(items[sel] ?? "").trim() ||
+    (kind === BRANCH_KIND_PRODUCT ? `Product ${sel + 1}` : `Material ${sel + 1}`);
+  if (detailName) detailName.textContent = itemLabel;
 
-  ensureRawMaterialBranchesAligned();
-  const br = state.industry.rawMaterialBranches?.[sel];
+  const br = branchRow(kind, sel);
   if (!br) {
     if (mountEl) mountEl.innerHTML = "";
     if (saveRow) saveRow.classList.add("is-hidden");
@@ -3892,7 +4534,9 @@ function syncParticipantLeftPanel() {
     if (placeholderEl) {
       placeholderEl.classList.remove("is-hidden");
       placeholderEl.textContent =
-        "Answer the prompts (intro, origin, and map if needed) for this material before the supply chain diagram appears here.";
+        kind === BRANCH_KIND_PRODUCT
+          ? "Answer the prompts (intro, origin, and map if needed) for this product before the supply chain diagram appears here."
+          : "Answer the prompts (intro, origin, and map if needed) for this material before the supply chain diagram appears here.";
     }
     if (saveRow) saveRow.classList.add("is-hidden");
     return;
@@ -3902,13 +4546,15 @@ function syncParticipantLeftPanel() {
     if (mountEl) mountEl.innerHTML = "";
     if (placeholderEl) {
       placeholderEl.classList.remove("is-hidden");
-      placeholderEl.textContent = "This raw material was skipped — no supply chain diagram.";
+      placeholderEl.textContent =
+        kind === BRANCH_KIND_PRODUCT
+          ? "This product was skipped — no supply chain diagram."
+          : "This raw material was skipped — no supply chain diagram.";
     }
     if (saveRow) saveRow.classList.add("is-hidden");
     return;
   }
 
-  // First-time diagram entry uses the floating popup; after it is saved, the left panel shows the diagram for review/editing.
   if (rawMaterialSupplyChainBranchNeedsDiagramGate(br)) {
     if (mountEl) mountEl.innerHTML = "";
     if (placeholderEl) {
@@ -3925,12 +4571,13 @@ function syncParticipantLeftPanel() {
     placeholderEl.textContent = "";
   }
 
-  const drawingHere = Boolean(dr && dr.materialIndex === sel);
+  const drawingHere = Boolean(dr && dr.branchKind === kind && dr.branchIndex === sel);
   const readOnly = drawingHere;
 
   renderSupplyChainDiagramMount(sel, {
     readOnly,
-    mountId: "participantLeftDiagramMount"
+    mountId: "participantLeftDiagramMount",
+    branchKind: kind
   });
 
   if (saveRow) {
@@ -3942,33 +4589,42 @@ function syncParticipantLeftPanel() {
   });
 }
 
-function openRawMaterialSupplyChainDiagramGate(materialIndex) {
+function openSupplyChainDiagramGate(kind, index) {
+  ui.scKind = kind;
   const gate = document.getElementById("rawMaterialSupplyChainDiagramGate");
   if (!gate) return;
+  document.getElementById("participantProductsGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialSupplyChainIntroGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialOriginGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialTripFrequencyGate")?.classList.remove("is-open");
-  ui.rawMaterialTripFrequencyMaterialIndex = null;
-  ui.rawMaterialBranchMap = null;
-  ui.rawMaterialOriginEditingIndex = null;
-  ui.rawMaterialSupplyChainIntroIndex = null;
-  ensureRawMaterialBranchesAligned();
-  const br = state.industry.rawMaterialBranches[materialIndex];
+  ui.scTripFreqIndex = null;
+  ui.scBranchMap = null;
+  ui.scOriginIndex = null;
+  ui.scIntroIndex = null;
+  const { items, ensure, branchesKey } = industryBranchArrays(kind);
+  ensure();
+  const br = state.industry[branchesKey][index];
   if (!br || br.originCategoryKey === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) return;
   br.supplyChainDiagram = applySupplyChainDiagramConstraints(br.supplyChainDiagram ?? defaultSupplyChainDiagram());
-  ui.rawMaterialSupplyChainDiagramIndex = materialIndex;
+  ui.scDiagramIndex = index;
   const badge = document.getElementById("rawMaterialSupplyChainDiagramBadge");
   const titleEl = document.getElementById("rawMaterialSupplyChainDiagramTitle");
-  const matName = String(state.industry.rawMaterials[materialIndex] ?? "").trim() || "this material";
+  const matName =
+    String(items[index] ?? "").trim() || (kind === BRANCH_KIND_PRODUCT ? "this product" : "this material");
   if (badge) badge.textContent = matName;
+  const kindPrefixEl = document.getElementById("supplyChainDiagramKindPrefix");
+  if (kindPrefixEl) {
+    kindPrefixEl.textContent = kind === BRANCH_KIND_PRODUCT ? "Product" : "Raw material";
+  }
   if (titleEl) {
     titleEl.textContent = `Please Provide the Supply Chain Information of ${matName}`;
   }
   if (SURVEY_MODE === "participant") {
-    ui.participantSelectedRawMaterialIndex = materialIndex;
+    ui.participantLeftPanelKind = kind;
+    ui.participantLeftPanelIndex = index;
   }
   gate.classList.add("is-open");
-  renderSupplyChainDiagramMount(materialIndex);
+  renderSupplyChainDiagramMount(index, { branchKind: kind });
   syncParticipantMapGateOverlay();
   if (SURVEY_MODE === "participant") {
     syncParticipantLeftPanel();
@@ -3979,22 +4635,30 @@ function openRawMaterialSupplyChainDiagramGate(materialIndex) {
   });
 }
 
-function openRawMaterialTripFrequencyGate(materialIndex) {
+function openRawMaterialSupplyChainDiagramGate(materialIndex) {
+  openSupplyChainDiagramGate(BRANCH_KIND_RAW, materialIndex);
+}
+
+function openTripFrequencyGate(kind, index) {
+  ui.scKind = kind;
   const gate = document.getElementById("rawMaterialTripFrequencyGate");
   if (!gate) return;
+  document.getElementById("participantProductsGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialSupplyChainIntroGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialOriginGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.remove("is-open");
-  ui.rawMaterialBranchMap = null;
-  ui.rawMaterialOriginEditingIndex = null;
-  ui.rawMaterialSupplyChainIntroIndex = null;
-  ui.rawMaterialSupplyChainDiagramIndex = null;
+  ui.scBranchMap = null;
+  ui.scOriginIndex = null;
+  ui.scIntroIndex = null;
+  ui.scDiagramIndex = null;
   resetSupplyChainRouteDraft();
-  ensureRawMaterialBranchesAligned();
-  const br = state.industry.rawMaterialBranches[materialIndex];
+  const { items, ensure, branchesKey } = industryBranchArrays(kind);
+  ensure();
+  const br = state.industry[branchesKey][index];
   if (!br || !rawMaterialSupplyChainBranchNeedsTripFrequencyGate(br)) return;
-  ui.rawMaterialTripFrequencyMaterialIndex = materialIndex;
-  const matName = String(state.industry.rawMaterials[materialIndex] ?? "").trim() || "this material";
+  ui.scTripFreqIndex = index;
+  const matName =
+    String(items[index] ?? "").trim() || (kind === BRANCH_KIND_PRODUCT ? "this product" : "this material");
   const titleEl = document.getElementById("rawMaterialTripFrequencyGateTitle");
   if (titleEl) {
     titleEl.textContent = `What is the frequency of this trip for ${matName}?`;
@@ -4009,7 +4673,8 @@ function openRawMaterialTripFrequencyGate(materialIndex) {
     periodSel.value = normalizeTripFrequencyPeriod(br.tripFrequencyPeriod);
   }
   if (SURVEY_MODE === "participant") {
-    ui.participantSelectedRawMaterialIndex = materialIndex;
+    ui.participantLeftPanelKind = kind;
+    ui.participantLeftPanelIndex = index;
   }
   gate.classList.add("is-open");
   syncParticipantMapGateOverlay();
@@ -4017,45 +4682,61 @@ function openRawMaterialTripFrequencyGate(materialIndex) {
   requestAnimationFrame(() => document.getElementById("rawMaterialTripFrequencyCount")?.focus());
 }
 
-function openRawMaterialSupplyChainIntroGate(materialIndex) {
+function openRawMaterialTripFrequencyGate(materialIndex) {
+  openTripFrequencyGate(BRANCH_KIND_RAW, materialIndex);
+}
+
+function openSupplyChainIntroGate(kind, index) {
+  ui.scKind = kind;
   const gate = document.getElementById("rawMaterialSupplyChainIntroGate");
   const titleEl = document.getElementById("rawMaterialSupplyChainIntroTitle");
   if (!gate) return;
+  document.getElementById("participantProductsGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialOriginGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialTripFrequencyGate")?.classList.remove("is-open");
-  ui.rawMaterialTripFrequencyMaterialIndex = null;
-  ui.rawMaterialSupplyChainDiagramIndex = null;
-  ui.rawMaterialBranchMap = null;
-  ui.rawMaterialOriginEditingIndex = null;
-  const matName = String(state.industry.rawMaterials[materialIndex] ?? "").trim() || "this material";
+  ui.scTripFreqIndex = null;
+  ui.scDiagramIndex = null;
+  ui.scBranchMap = null;
+  ui.scOriginIndex = null;
+  const { items } = industryBranchArrays(kind);
+  const matName =
+    String(items[index] ?? "").trim() || (kind === BRANCH_KIND_PRODUCT ? "this product" : "this material");
   if (titleEl) {
     titleEl.textContent = `Now Please provide some information about the supply chain of ${matName}`;
   }
-  ui.rawMaterialSupplyChainIntroIndex = materialIndex;
+  ui.scIntroIndex = index;
   gate.classList.add("is-open");
   syncParticipantMapGateOverlay();
   requestAnimationFrame(() => document.getElementById("rawMaterialSupplyChainIntroContinueBtn")?.focus());
 }
 
-function openRawMaterialOriginQuestionGate(materialIndex) {
+function openRawMaterialSupplyChainIntroGate(materialIndex) {
+  openSupplyChainIntroGate(BRANCH_KIND_RAW, materialIndex);
+}
+
+function openOriginQuestionGate(kind, index) {
+  ui.scKind = kind;
   const gate = document.getElementById("rawMaterialOriginGate");
   const titleEl = document.getElementById("rawMaterialOriginGateTitle");
   if (!gate) return;
+  document.getElementById("participantProductsGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialSupplyChainIntroGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialSupplyChainDiagramGate")?.classList.remove("is-open");
   document.getElementById("rawMaterialTripFrequencyGate")?.classList.remove("is-open");
-  ui.rawMaterialTripFrequencyMaterialIndex = null;
-  ui.rawMaterialSupplyChainIntroIndex = null;
-  ui.rawMaterialSupplyChainDiagramIndex = null;
-  const matName = String(state.industry.rawMaterials[materialIndex] ?? "").trim() || "this material";
+  ui.scTripFreqIndex = null;
+  ui.scIntroIndex = null;
+  ui.scDiagramIndex = null;
+  const { items, ensure, branchesKey } = industryBranchArrays(kind);
+  const matName =
+    String(items[index] ?? "").trim() || (kind === BRANCH_KIND_PRODUCT ? "this product" : "this material");
   if (titleEl) {
     titleEl.textContent = `Where does ${matName} originate?`;
   }
-  ui.rawMaterialOriginEditingIndex = materialIndex;
-  ui.rawMaterialBranchMap = null;
-  ensureRawMaterialBranchesAligned();
-  const br = state.industry.rawMaterialBranches[materialIndex] ?? {};
+  ui.scOriginIndex = index;
+  ui.scBranchMap = null;
+  ensure();
+  const br = state.industry[branchesKey][index] ?? {};
 
   document.querySelectorAll('input[name="rawMaterialOriginChoice"]').forEach((r) => {
     r.checked = br.originCategoryKey === r.value;
@@ -4075,21 +4756,27 @@ function openRawMaterialOriginQuestionGate(materialIndex) {
   });
 }
 
+function openRawMaterialOriginQuestionGate(materialIndex) {
+  openOriginQuestionGate(BRANCH_KIND_RAW, materialIndex);
+}
+
 function skipRawMaterialOriginMap() {
   if (readOnly || SURVEY_MODE !== "participant") return;
-  const idx = ui.rawMaterialBranchMap?.materialIndex;
-  if (idx == null || idx < 0) return;
+  const kind = ui.scBranchMap?.kind;
+  const idx = ui.scBranchMap?.branchIndex;
+  if (kind == null || idx == null || idx < 0) return;
   clearPendingLocation();
-  ensureRawMaterialBranchesAligned();
-  const row = state.industry.rawMaterialBranches[idx] ?? {};
+  const { ensure, branchesKey } = industryBranchArrays(kind);
+  ensure();
+  const row = state.industry[branchesKey][idx] ?? {};
   if (row.originCategoryKey === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) return;
-  state.industry.rawMaterialBranches[idx] = {
+  state.industry[branchesKey][idx] = {
     ...row,
     originMapSkipped: true,
     originX: null,
     originY: null
   };
-  ui.rawMaterialBranchMap = null;
+  ui.scBranchMap = null;
   void flushSaveToServer();
   rebuildFromState();
   uiUpdateStats();
@@ -4110,14 +4797,25 @@ function initParticipantRawMaterialOriginMapSkipOnce() {
 function initParticipantLeftPanelOnce() {
   if (SURVEY_MODE !== "participant" || document.body.dataset.participantLeftPanelBound === "1") return;
   const pills = document.getElementById("participantRawMaterialPills");
-  if (!pills) return;
+  const productPills = document.getElementById("participantProductPills");
+  if (!pills && !productPills) return;
   document.body.dataset.participantLeftPanelBound = "1";
-  pills.addEventListener("click", (e) => {
+  pills?.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-participant-rm-index]");
     if (!btn) return;
     const i = Number(btn.getAttribute("data-participant-rm-index"));
     if (Number.isNaN(i)) return;
-    ui.participantSelectedRawMaterialIndex = i;
+    ui.participantLeftPanelKind = BRANCH_KIND_RAW;
+    ui.participantLeftPanelIndex = i;
+    syncParticipantLeftPanel();
+  });
+  productPills?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-participant-product-index]");
+    if (!btn) return;
+    const i = Number(btn.getAttribute("data-participant-product-index"));
+    if (Number.isNaN(i)) return;
+    ui.participantLeftPanelKind = BRANCH_KIND_PRODUCT;
+    ui.participantLeftPanelIndex = i;
     syncParticipantLeftPanel();
   });
 }
@@ -4134,10 +4832,11 @@ function initParticipantRawMaterialSupplyChainDiagramOnce() {
 
   const commitSupplyChainDiagramSave = () => {
     if (readOnly) return;
-    const idx =
-      ui.participantSelectedRawMaterialIndex != null && ui.participantSelectedRawMaterialIndex >= 0
-        ? ui.participantSelectedRawMaterialIndex
-        : ui.rawMaterialSupplyChainDiagramIndex;
+    const kind = ui.scKind ?? BRANCH_KIND_RAW;
+    let idx = ui.scDiagramIndex;
+    if (idx == null || idx < 0) {
+      if (ui.participantLeftPanelKind === kind) idx = ui.participantLeftPanelIndex;
+    }
     if (idx == null || idx < 0) return;
     const diagramGateOpen = gate?.classList.contains("is-open");
     const mountId =
@@ -4146,15 +4845,28 @@ function initParticipantRawMaterialSupplyChainDiagramOnce() {
         : SURVEY_MODE === "participant"
           ? "participantLeftDiagramMount"
           : "rawMaterialSupplyChainDiagramMount";
-    let collected = collectSupplyChainDiagramFromMount(idx, mountId);
+    let collected = collectSupplyChainDiagramFromMount(idx, mountId, kind);
     if (!collected) return;
     collected = applySupplyChainDiagramConstraints(collected);
     if (!isSupplyChainDiagramComplete(collected)) {
       window.alert('Please complete all fields in the diagram, including any "Others" detail.');
       return;
     }
-    ensureRawMaterialBranchesAligned();
-    const prevRow = state.industry.rawMaterialBranches[idx];
+    const { ensure, branchesKey } = industryBranchArrays(kind);
+    ensure();
+    const mount = document.getElementById(mountId);
+    let prevRow = state.industry[branchesKey][idx];
+    if (mountId === "participantLeftDiagramMount" && mount) {
+      const o = readOriginFieldsFromDiagramMount(mount);
+      if (o) {
+        const res = applyOriginFromLeftDiagramToRow(prevRow, collected, o);
+        if (res.error) {
+          window.alert(res.error);
+          return;
+        }
+        prevRow = res.row;
+      }
+    }
     let mergedRow = {
       ...prevRow,
       supplyChainDiagram: collected,
@@ -4170,16 +4882,16 @@ function initParticipantRawMaterialSupplyChainDiagramOnce() {
         tripFrequencyPeriod: ""
       };
     }
-    state.industry.rawMaterialBranches[idx] = mergedRow;
+    state.industry[branchesKey][idx] = mergedRow;
     gate?.classList.remove("is-open");
-    ui.rawMaterialSupplyChainDiagramIndex = null;
+    ui.scDiagramIndex = null;
     void flushSaveToServer();
     rebuildFromState();
     uiUpdateStats();
     syncParticipantMapGateOverlay();
     syncParticipantLeftPanel();
-    resumeRawMaterialBranchFlow();
-    if (!participantRawMaterialBranchWorkIncomplete()) {
+    resumeParticipantSupplyChainFlow();
+    if (!participantAnySupplyChainBranchWorkIncomplete()) {
       setParticipantMapHintAfterIndustryGate();
       void flushSaveToServer();
     }
@@ -4203,7 +4915,7 @@ function initParticipantRawMaterialTripFrequencyOnce() {
   if (!gate || !btn) return;
   document.body.dataset.participantRawMaterialTripFreqBound = "1";
   btn.addEventListener("click", () => {
-    const idx = ui.rawMaterialTripFrequencyMaterialIndex;
+    const idx = ui.scTripFreqIndex;
     if (idx == null || idx < 0) return;
     const n = Number(document.getElementById("rawMaterialTripFrequencyCount")?.value ?? "");
     const per = normalizeTripFrequencyPeriod(document.getElementById("rawMaterialTripFrequencyPeriod")?.value);
@@ -4215,21 +4927,23 @@ function initParticipantRawMaterialTripFrequencyOnce() {
       window.alert("Please choose Day, Week, or Month.");
       return;
     }
-    ensureRawMaterialBranchesAligned();
-    const prev = state.industry.rawMaterialBranches[idx];
-    state.industry.rawMaterialBranches[idx] = {
+    const kind = ui.scKind ?? BRANCH_KIND_RAW;
+    const { ensure, branchesKey } = industryBranchArrays(kind);
+    ensure();
+    const prev = state.industry[branchesKey][idx];
+    state.industry[branchesKey][idx] = {
       ...prev,
       tripFrequencyCount: Math.floor(n),
       tripFrequencyPeriod: per
     };
     gate.classList.remove("is-open");
-    ui.rawMaterialTripFrequencyMaterialIndex = null;
+    ui.scTripFreqIndex = null;
     void flushSaveToServer();
     rebuildFromState();
     uiUpdateStats();
     syncParticipantMapGateOverlay();
-    resumeRawMaterialBranchFlow();
-    if (!participantRawMaterialBranchWorkIncomplete()) {
+    resumeParticipantSupplyChainFlow();
+    if (!participantAnySupplyChainBranchWorkIncomplete()) {
       setParticipantMapHintAfterIndustryGate();
       void flushSaveToServer();
     }
@@ -4252,18 +4966,20 @@ function initParticipantRawMaterialSupplyChainIntroOnce() {
   if (!gate || !btn) return;
   document.body.dataset.participantRawMaterialSupplyIntroBound = "1";
   btn.addEventListener("click", () => {
-    const idx = ui.rawMaterialSupplyChainIntroIndex;
+    const idx = ui.scIntroIndex;
     if (idx == null || idx < 0) return;
-    ensureRawMaterialBranchesAligned();
-    state.industry.rawMaterialBranches[idx] = {
-      ...state.industry.rawMaterialBranches[idx],
+    const kind = ui.scKind ?? BRANCH_KIND_RAW;
+    const { ensure, branchesKey } = industryBranchArrays(kind);
+    ensure();
+    state.industry[branchesKey][idx] = {
+      ...state.industry[branchesKey][idx],
       supplyChainIntroAcknowledged: true
     };
     gate.classList.remove("is-open");
-    ui.rawMaterialSupplyChainIntroIndex = null;
+    ui.scIntroIndex = null;
     void flushSaveToServer();
     syncParticipantMapGateOverlay();
-    openRawMaterialOriginQuestionGate(idx);
+    openOriginQuestionGate(kind, idx);
     if (map) {
       requestAnimationFrame(() => map.invalidateSize());
       setTimeout(() => map.invalidateSize(), 200);
@@ -4296,17 +5012,19 @@ function initParticipantRawMaterialOriginGateOnce() {
   });
 
   btn?.addEventListener("click", () => {
-    const idx = ui.rawMaterialOriginEditingIndex;
+    const idx = ui.scOriginIndex;
     if (idx == null || idx < 0) return;
+    const kind = ui.scKind ?? BRANCH_KIND_RAW;
+    const { ensure, branchesKey } = industryBranchArrays(kind);
     const sel = document.querySelector('input[name="rawMaterialOriginChoice"]:checked');
     if (!sel) {
       window.alert("Please select an option.");
       return;
     }
     if (sel.value === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) {
-      ensureRawMaterialBranchesAligned();
-      state.industry.rawMaterialBranches[idx] = {
-        ...state.industry.rawMaterialBranches[idx],
+      ensure();
+      state.industry[branchesKey][idx] = {
+        ...state.industry[branchesKey][idx],
         originCategoryKey: RAW_MATERIAL_ORIGIN_SKIPPED_KEY,
         originOtherDetail: "",
         originX: null,
@@ -4315,8 +5033,8 @@ function initParticipantRawMaterialOriginGateOnce() {
       };
       gate.classList.remove("is-open");
       syncParticipantMapGateOverlay();
-      ui.rawMaterialBranchMap = null;
-      ui.rawMaterialOriginEditingIndex = null;
+      ui.scBranchMap = null;
+      ui.scOriginIndex = null;
       void flushSaveToServer();
       rebuildFromState();
       uiUpdateStats();
@@ -4336,9 +5054,9 @@ function initParticipantRawMaterialOriginGateOnce() {
         return;
       }
     }
-    ensureRawMaterialBranchesAligned();
-    state.industry.rawMaterialBranches[idx] = {
-      ...state.industry.rawMaterialBranches[idx],
+    ensure();
+    state.industry[branchesKey][idx] = {
+      ...state.industry[branchesKey][idx],
       originCategoryKey: sel.value,
       originOtherDetail: sel.value === "other" ? detail : "",
       originMapSkipped: false,
@@ -4347,8 +5065,8 @@ function initParticipantRawMaterialOriginGateOnce() {
     };
     gate.classList.remove("is-open");
     syncParticipantMapGateOverlay();
-    ui.rawMaterialBranchMap = { materialIndex: idx };
-    ui.rawMaterialOriginEditingIndex = null;
+    ui.scBranchMap = { kind, branchIndex: idx };
+    ui.scOriginIndex = null;
     void flushSaveToServer();
     rebuildFromState();
     uiUpdateStats();
@@ -4379,6 +5097,7 @@ async function finishParticipantBoot() {
   initParticipantRoleGateOnce();
   initParticipantGoodsGateOnce();
   initParticipantRawMaterialsGateOnce();
+  initParticipantProductsGateOnce();
   initParticipantLeftPanelOnce();
   initParticipantRawMaterialSupplyChainIntroOnce();
   initParticipantRawMaterialSupplyChainDiagramOnce();
@@ -4475,6 +5194,8 @@ async function bootParticipant() {
     openParticipantRawMaterialsGate();
   } else if (participantRawMaterialBranchWorkIncomplete()) {
     resumeRawMaterialBranchFlow();
+  } else {
+    resumeParticipantSupplyChainFlow();
   }
 }
 
