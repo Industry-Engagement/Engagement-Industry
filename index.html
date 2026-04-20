@@ -72,68 +72,74 @@
         <header class="topbar">
           <div class="topbar__title">NYC Supply Chain Survey (conductor)</div>
           <div class="topbar__meta">
-            <span class="pill" id="activeStepPill">Step 1: Locations</span>
+            <span class="pill" id="activeStepPill">Map · all layers (read-only)</span>
           </div>
         </header>
 
         <main class="layout">
           <aside class="panel app--readonly-panel">
-            <nav class="tabs">
-              <button class="tab is-active" data-step="locations" type="button">
-                1. Locations
-              </button>
-              <button class="tab" data-step="currentRoutes" type="button">
-                2. Current Distribution
-              </button>
-              <button class="tab" data-step="ibxRoutes" type="button">
-                3. IBX Assumption
-              </button>
-              <button class="tab" data-step="export" type="button">
-                4. Export
-              </button>
-            </nav>
-
-            <section class="step" data-step-panel="locations">
-              <h2 class="panel__h2">Mark optional locations</h2>
-              <p class="panel__hint panel__hint--readonly">
-                Read-only: review the participant’s workplace and other points on the map. Their written industry
-                answer appears above the map when you select them.
-              </p>
-              <div class="panelActions">
-                <div class="miniStat">
-                  <div class="miniStat__label">Locations added</div>
-                  <div class="miniStat__value" id="locationsCount">0</div>
+            <div class="conductorParticipantMirror" aria-label="Participant survey summary">
+              <div
+                id="conductorProfileCard"
+                class="participantProfileCard participantProfileCard--conductorReadonly is-hidden"
+                aria-label="Participant profile (read-only)"
+              >
+                <div class="participantProfileRow participantProfileRow--products">
+                  <div class="participantProfileProductsHeader">
+                    <span class="participantProfileRow__label participantProfileRow__label--inline">Company</span>
+                  </div>
+                  <ul id="conductorProfileCompanyList" class="participantProfileProductList is-hidden" aria-label="Company name"></ul>
+                  <p id="conductorProfileCompanyEmpty" class="participantProfileProductsEmpty">—</p>
+                </div>
+                <div class="participantProfileRow participantProfileRow--products">
+                  <div class="participantProfileProductsHeader">
+                    <span class="participantProfileRow__label participantProfileRow__label--inline">Job &amp; Role</span>
+                  </div>
+                  <ul id="conductorProfileRoleList" class="participantProfileProductList is-hidden" aria-label="Job and role"></ul>
+                  <p id="conductorProfileRoleEmpty" class="participantProfileProductsEmpty">—</p>
+                </div>
+                <div class="participantProfileRow participantProfileRow--products">
+                  <div class="participantProfileProductsHeader">
+                    <span class="participantProfileRow__label participantProfileRow__label--inline">Type of Products</span>
+                  </div>
+                  <ul id="conductorProfileProductsList" class="participantProfileProductList is-hidden" aria-label="Selected product types"></ul>
+                  <p id="conductorProfileProductsEmpty" class="participantProfileProductsEmpty">—</p>
                 </div>
               </div>
-            </section>
-
-            <section class="step is-hidden" data-step-panel="currentRoutes">
-              <h2 class="panel__h2">Current distribution routes</h2>
-              <p class="panel__hint panel__hint--readonly">
-                Read-only: review routes drawn for the selected participant.
-              </p>
-              <div class="panelActions">
-                <div class="miniStat">
-                  <div class="miniStat__label">Current total cost</div>
-                  <div class="miniStat__value" id="currentTotalGold">0</div>
+              <div class="participantAsideContent conductorAsideContent">
+                <div id="conductorLeftEmpty" class="participantLeftEmpty" aria-hidden="true">
+                  Select a participant to view their raw materials, products, and supply-chain details (read-only).
+                </div>
+                <div id="conductorLeftShell" class="participantLeftShell is-hidden">
+                  <div class="participantLeftSection">
+                    <h3 class="participantLeftSection__h">Raw Materials</h3>
+                    <div id="conductorRawMaterialPills" class="participantPillRow" role="tablist" aria-label="Raw materials"></div>
+                  </div>
+                  <div class="participantLeftSection">
+                    <h3 class="participantLeftSection__h">Products</h3>
+                    <div
+                      id="conductorProductPills"
+                      class="participantPillRow participantPillRow--products"
+                      role="tablist"
+                      aria-label="Products"
+                    ></div>
+                  </div>
+                  <div id="conductorLeftDetail" class="participantLeftDetail is-hidden">
+                    <h3 class="participantLeftDetail__h">
+                      <span class="participantLeftDetail__label">Detail:</span>
+                      <span id="conductorLeftDetailName" class="participantLeftDetail__name"></span>
+                    </h3>
+                    <p id="conductorLeftDetailPlaceholder" class="participantLeftDetailPlaceholder is-hidden"></p>
+                    <div
+                      id="conductorLeftDiagramMount"
+                      class="supplyChainDiagramMount supplyChainDiagramMount--left"
+                    ></div>
+                  </div>
                 </div>
               </div>
-            </section>
+            </div>
 
-            <section class="step is-hidden" data-step-panel="ibxRoutes">
-              <h2 class="panel__h2">IBX assumption routes</h2>
-              <p class="panel__hint panel__hint--readonly">
-                Read-only: switch to this tab to show IBX rail context on the map.
-              </p>
-              <div class="panelActions">
-                <div class="miniStat">
-                  <div class="miniStat__label">IBX total cost</div>
-                  <div class="miniStat__value" id="ibxTotalGold">0</div>
-                </div>
-              </div>
-            </section>
-
-            <section class="step is-hidden" data-step-panel="export">
+            <div class="conductorExportBlock" aria-label="Export survey data">
               <h2 class="panel__h2">Export survey data</h2>
               <p class="panel__hint">
                 <strong>Selected participant</strong> — includes participant columns in the file.
@@ -172,7 +178,7 @@
                   <span class="exportSummary__value" id="exportIbXSegments">0</span>
                 </div>
               </div>
-            </section>
+            </div>
           </aside>
 
           <section class="mapWrap">

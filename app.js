@@ -1803,6 +1803,7 @@ function rebuildFromState() {
   }
 
   syncParticipantLeftPanel();
+  syncConductorParticipantLeftPanel();
 
   uiUpdateStats();
 }
@@ -1874,26 +1875,75 @@ function uiUpdateStats() {
     }
   }
 
-  const condInd = document.getElementById("conductorIndustryLabel");
-  if (condInd && SURVEY_MODE === "conductor") {
-    const c = String(state.industry?.companyName ?? "").trim();
-    const rk = String(state.industry?.roleKey ?? "").trim();
-    let roleSuffix = "";
-    if (rk === "manager") roleSuffix = " · Manager";
-    else if (rk === "worker") roleSuffix = " · Worker";
-    else if (rk === "transporter") roleSuffix = " · Transporter";
-    else if (rk === "other") {
-      const d = String(state.industry?.roleOtherDetail ?? "").trim();
-      roleSuffix = d ? ` · Others (${d})` : " · Others";
+  if (SURVEY_MODE === "conductor") {
+    const condInd = document.getElementById("conductorIndustryLabel");
+    if (condInd) {
+      const c = String(state.industry?.companyName ?? "").trim();
+      const rk = String(state.industry?.roleKey ?? "").trim();
+      let roleSuffix = "";
+      if (rk === "manager") roleSuffix = " · Manager";
+      else if (rk === "worker") roleSuffix = " · Worker";
+      else if (rk === "transporter") roleSuffix = " · Transporter";
+      else if (rk === "other") {
+        const d = String(state.industry?.roleOtherDetail ?? "").trim();
+        roleSuffix = d ? ` · Others (${d})` : " · Others";
+      }
+      const goodsSuffix = formatParticipantGoodsSummary(state.industry);
+      const goodsPart = goodsSuffix ? ` · Goods: ${goodsSuffix}` : "";
+      const rawSuffix = formatParticipantRawMaterialsSummary(state.industry);
+      const rawPart = rawSuffix ? ` · Raw materials: ${rawSuffix}` : "";
+      const prodSuffix = formatParticipantProductsSummary(state.industry);
+      const prodPart = prodSuffix ? ` · Products: ${prodSuffix}` : "";
+      condInd.textContent = c ? `Industry / company: ${c}${roleSuffix}${goodsPart}${rawPart}${prodPart}` : "";
+      condInd.classList.toggle("is-hidden", !c || !viewingParticipantId);
     }
-    const goodsSuffix = formatParticipantGoodsSummary(state.industry);
-    const goodsPart = goodsSuffix ? ` · Goods: ${goodsSuffix}` : "";
-    const rawSuffix = formatParticipantRawMaterialsSummary(state.industry);
-    const rawPart = rawSuffix ? ` · Raw materials: ${rawSuffix}` : "";
-    const prodSuffix = formatParticipantProductsSummary(state.industry);
-    const prodPart = prodSuffix ? ` · Products: ${prodSuffix}` : "";
-    condInd.textContent = c ? `Industry / company: ${c}${roleSuffix}${goodsPart}${rawPart}${prodPart}` : "";
-    condInd.classList.toggle("is-hidden", !c || !viewingParticipantId);
+
+    const cProfileCard = document.getElementById("conductorProfileCard");
+    const cCompanyList = document.getElementById("conductorProfileCompanyList");
+    const cCompanyEmpty = document.getElementById("conductorProfileCompanyEmpty");
+    const cRoleList = document.getElementById("conductorProfileRoleList");
+    const cRoleEmpty = document.getElementById("conductorProfileRoleEmpty");
+    const cProductsList = document.getElementById("conductorProfileProductsList");
+    const cProductsEmpty = document.getElementById("conductorProfileProductsEmpty");
+    if (
+      cProfileCard &&
+      cCompanyList &&
+      cCompanyEmpty &&
+      cRoleList &&
+      cRoleEmpty &&
+      cProductsList &&
+      cProductsEmpty
+    ) {
+      const company = String(state.industry?.companyName ?? "").trim();
+      const roleText = formatParticipantRoleSummary(state.industry);
+      const goodsText = formatParticipantGoodsSummary(state.industry);
+      const dash = "—";
+
+      const companyHtml = participantCompanyProfileListInnerHtml();
+      cCompanyList.innerHTML = companyHtml;
+      const hasCompanyRow = companyHtml.length > 0;
+      cCompanyList.classList.toggle("is-hidden", !hasCompanyRow);
+      cCompanyEmpty.classList.toggle("is-hidden", hasCompanyRow);
+      cCompanyEmpty.textContent = dash;
+
+      const roleHtml = participantRoleProfileListInnerHtml();
+      cRoleList.innerHTML = roleHtml;
+      const hasRoleRow = roleHtml.length > 0;
+      cRoleList.classList.toggle("is-hidden", !hasRoleRow);
+      cRoleEmpty.classList.toggle("is-hidden", hasRoleRow);
+      cRoleEmpty.textContent = dash;
+
+      const goodsListHtml = participantGoodsProfileListInnerHtml(state.industry);
+      cProductsList.innerHTML = goodsListHtml;
+      const hasProductRows = goodsListHtml.length > 0;
+      cProductsList.classList.toggle("is-hidden", !hasProductRows);
+      cProductsEmpty.classList.toggle("is-hidden", hasProductRows);
+      cProductsEmpty.textContent = dash;
+      const show =
+        Boolean(viewingParticipantId) &&
+        (Boolean(company || roleText || goodsText) || participantRawMaterialsIsComplete());
+      cProfileCard.classList.toggle("is-hidden", !show);
+    }
   }
 
   updateParticipantCompanyBanner();
@@ -2045,6 +2095,22 @@ function setStep(step) {
     return;
   }
 
+  // Conductor: no step tabs; map always shows locations, routes, supply-chain layers, and IBX line/stations.
+  if (SURVEY_MODE === "conductor") {
+    ui.activeStep = "locations";
+    updateParticipantCompanyBanner();
+    updateParticipantRawMaterialOriginBanner();
+    syncConductorParticipantLeftPanel();
+    if (!map) return;
+    if (layers?.locations && !map.hasLayer(layers.locations)) layers.locations.addTo(map);
+    if (layers?.pendingLocation && !map.hasLayer(layers.pendingLocation)) layers.pendingLocation.addTo(map);
+    if (layers?.currentRoutes && !map.hasLayer(layers.currentRoutes)) layers.currentRoutes.addTo(map);
+    if (layers?.ibxRoutes && !map.hasLayer(layers.ibxRoutes)) layers.ibxRoutes.addTo(map);
+    if (layers?.ibxLine && !map.hasLayer(layers.ibxLine)) layers.ibxLine.addTo(map);
+    if (layers?.ibxStations && !map.hasLayer(layers.ibxStations)) layers.ibxStations.addTo(map);
+    return;
+  }
+
   ui.activeStep = step;
   document.querySelectorAll(".tab").forEach((el) => {
     el.classList.toggle("is-active", el.dataset.step === step);
@@ -2066,11 +2132,13 @@ function setStep(step) {
   updateParticipantCompanyBanner();
   updateParticipantRawMaterialOriginBanner();
 
-  if (step === "locations") syncParticipantLeftPanel();
+  if (step === "locations") {
+    syncParticipantLeftPanel();
+    syncConductorParticipantLeftPanel();
+  }
 
   if (step !== "locations") clearPendingLocation();
 
-  // Conductor review UX: show only the relevant layer(s) for the selected step.
   if (!map) return;
   if (layers?.locations) {
     if (step === "locations") {
@@ -2104,7 +2172,6 @@ function setStep(step) {
     }
   }
 
-  // IBX railway context should appear in Step 3.
   if (step === "ibxRoutes") {
     if (!map.hasLayer(layers.ibxLine)) layers.ibxLine.addTo(map);
     if (!map.hasLayer(layers.ibxStations)) layers.ibxStations.addTo(map);
@@ -2864,7 +2931,7 @@ function setupMap() {
   layers.supplyChainDestinations.addTo(map);
   layers.supplyChainDraft.addTo(map);
   layers.ibxRoutes.addTo(map);
-  // ibxLine is only shown when user enters Step 3 (handled in setStep()).
+  // IBX line/stations: always on map for conductor; standalone toggles via setStep (ibxRoutes step).
 
   map.on("mousemove", (e) => {
     if (readOnly) return;
@@ -4031,8 +4098,10 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
     String(items[materialIndex] ?? "").trim() ||
     (branchKind === BRANCH_KIND_PRODUCT ? "this product" : "this material");
   const showTripFreqLeft =
-    mountId === "participantLeftDiagramMount" &&
-    SURVEY_MODE === "participant" &&
+    (mountId === "participantLeftDiagramMount" && SURVEY_MODE === "participant") ||
+    (mountId === "conductorLeftDiagramMount" && SURVEY_MODE === "conductor");
+  const showTripFreqLeftResolved =
+    showTripFreqLeft &&
     br.originCategoryKey !== RAW_MATERIAL_ORIGIN_SKIPPED_KEY &&
     isSupplyChainTransportRoutesComplete(br) &&
     isTripFrequencyComplete(br);
@@ -4086,9 +4155,11 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
       `<div class="supplyChainDiagram__readonly"><img class="supplyChainDiagram__icon" src="${originIcon}" alt=""/> <span>${originSummary}</span></div>`
     );
     parts.push(
-      readOnly
-        ? `<p class="supplyChainDiagram__hint">Reference while you draw each transportation leg on the map.</p>`
-        : `<p class="supplyChainDiagram__hint">Same as your answer for where ${escapeHtml(matLabel)} originates.</p>`
+      readOnly && mountId === "conductorLeftDiagramMount"
+        ? `<p class="supplyChainDiagram__hint">Participant’s recorded originating location (read-only).</p>`
+        : readOnly
+          ? `<p class="supplyChainDiagram__hint">Reference while you draw each transportation leg on the map.</p>`
+          : `<p class="supplyChainDiagram__hint">Same as your answer for where ${escapeHtml(matLabel)} originates.</p>`
     );
   }
   parts.push(`</div></div>`);
@@ -4215,7 +4286,7 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
   }
   parts.push(`</div></div>`);
 
-  if (showTripFreqLeft) {
+  if (showTripFreqLeftResolved) {
     const n = br.tripFrequencyCount;
     const per = normalizeTripFrequencyPeriod(br.tripFrequencyPeriod);
     const countVal = n != null && Number.isFinite(Number(n)) ? String(Math.floor(Number(n))) : "";
@@ -4589,6 +4660,183 @@ function syncParticipantLeftPanel() {
   });
 }
 
+/**
+ * Conductor main site: mirror participant left panel (profile, pills, diagram) read-only.
+ */
+function syncConductorParticipantLeftPanel() {
+  if (SURVEY_MODE !== "conductor") return;
+  const profileCard = document.getElementById("conductorProfileCard");
+  const emptyEl = document.getElementById("conductorLeftEmpty");
+  const shellEl = document.getElementById("conductorLeftShell");
+  const pillsEl = document.getElementById("conductorRawMaterialPills");
+  const productPillsEl = document.getElementById("conductorProductPills");
+  const detailEl = document.getElementById("conductorLeftDetail");
+  const detailName = document.getElementById("conductorLeftDetailName");
+  const placeholderEl = document.getElementById("conductorLeftDetailPlaceholder");
+  const mountEl = document.getElementById("conductorLeftDiagramMount");
+  if (!emptyEl || !shellEl) return;
+
+  if (!viewingParticipantId) {
+    if (profileCard) profileCard.classList.add("is-hidden");
+    emptyEl.classList.remove("is-hidden");
+    emptyEl.setAttribute("aria-hidden", "false");
+    emptyEl.textContent =
+      "Select a participant to view their raw materials, products, and supply-chain details (read-only).";
+    shellEl.classList.add("is-hidden");
+    if (mountEl) mountEl.innerHTML = "";
+    if (placeholderEl) {
+      placeholderEl.classList.add("is-hidden");
+      placeholderEl.textContent = "";
+    }
+    return;
+  }
+
+  const mats = state.industry.rawMaterials ?? [];
+  const prods = state.industry.products ?? [];
+  const hasMaterials = participantRawMaterialsIsComplete();
+  const hasProducts = participantProductsIsComplete();
+
+  if (!hasMaterials) {
+    emptyEl.classList.remove("is-hidden");
+    emptyEl.setAttribute("aria-hidden", "false");
+    emptyEl.textContent =
+      "This participant has not completed the raw materials step yet — nothing to show in the supply-chain panel.";
+    shellEl.classList.add("is-hidden");
+    if (mountEl) mountEl.innerHTML = "";
+    if (placeholderEl) {
+      placeholderEl.classList.add("is-hidden");
+      placeholderEl.textContent = "";
+    }
+    return;
+  }
+
+  emptyEl.classList.add("is-hidden");
+  emptyEl.setAttribute("aria-hidden", "true");
+  shellEl.classList.remove("is-hidden");
+
+  if (ui.participantLeftPanelKind === BRANCH_KIND_RAW && mats.length > 0) {
+    if (ui.participantLeftPanelIndex < 0 || ui.participantLeftPanelIndex >= mats.length) {
+      ui.participantLeftPanelIndex = 0;
+    }
+  }
+  if (ui.participantLeftPanelKind === BRANCH_KIND_PRODUCT && hasProducts && prods.length > 0) {
+    if (ui.participantLeftPanelIndex < 0 || ui.participantLeftPanelIndex >= prods.length) {
+      ui.participantLeftPanelIndex = 0;
+    }
+  }
+
+  let pillsHtml = "";
+  for (let i = 0; i < mats.length; i++) {
+    const label = String(mats[i] ?? "").trim() || `Material ${i + 1}`;
+    const active =
+      ui.participantLeftPanelKind === BRANCH_KIND_RAW && ui.participantLeftPanelIndex === i ? " is-active" : "";
+    pillsHtml += `<button type="button" class="participantPill${active}" data-conductor-rm-index="${i}" role="tab" aria-selected="${
+      ui.participantLeftPanelKind === BRANCH_KIND_RAW && ui.participantLeftPanelIndex === i ? "true" : "false"
+    }">${escapeHtml(label)}</button>`;
+  }
+  if (pillsEl) pillsEl.innerHTML = pillsHtml;
+
+  if (productPillsEl) {
+    if (!hasProducts) {
+      productPillsEl.innerHTML = `<span class="participantPill participantPill--muted">Products appear here after the participant lists them.</span>`;
+    } else {
+      ensureProductBranchesAligned();
+      let ph = "";
+      for (let i = 0; i < prods.length; i++) {
+        const label = String(prods[i] ?? "").trim() || `Product ${i + 1}`;
+        const active =
+          ui.participantLeftPanelKind === BRANCH_KIND_PRODUCT && ui.participantLeftPanelIndex === i
+            ? " is-active"
+            : "";
+        ph += `<button type="button" class="participantPill${active}" data-conductor-product-index="${i}" role="tab" aria-selected="${
+          ui.participantLeftPanelKind === BRANCH_KIND_PRODUCT && ui.participantLeftPanelIndex === i ? "true" : "false"
+        }">${escapeHtml(label)}</button>`;
+      }
+      productPillsEl.innerHTML = ph;
+    }
+  }
+
+  const kind = ui.participantLeftPanelKind;
+  const items = kind === BRANCH_KIND_PRODUCT ? prods : mats;
+  const sel = ui.participantLeftPanelIndex;
+
+  if (kind === BRANCH_KIND_PRODUCT && !hasProducts) {
+    if (detailEl) detailEl.classList.add("is-hidden");
+    if (mountEl) mountEl.innerHTML = "";
+    return;
+  }
+
+  if (sel == null || sel < 0 || sel >= items.length) {
+    if (detailEl) detailEl.classList.add("is-hidden");
+    if (mountEl) mountEl.innerHTML = "";
+    if (placeholderEl) placeholderEl.classList.add("is-hidden");
+    return;
+  }
+
+  if (detailEl) detailEl.classList.remove("is-hidden");
+  const itemLabel =
+    String(items[sel] ?? "").trim() ||
+    (kind === BRANCH_KIND_PRODUCT ? `Product ${sel + 1}` : `Material ${sel + 1}`);
+  if (detailName) detailName.textContent = itemLabel;
+
+  const br = branchRow(kind, sel);
+  if (!br) {
+    if (mountEl) mountEl.innerHTML = "";
+    return;
+  }
+
+  if (
+    rawMaterialSupplyChainBranchNeedsIntroGate(br) ||
+    rawMaterialOriginBranchNeedsCategoryGate(br) ||
+    rawMaterialOriginBranchNeedsMap(br)
+  ) {
+    if (mountEl) mountEl.innerHTML = "";
+    if (placeholderEl) {
+      placeholderEl.classList.remove("is-hidden");
+      placeholderEl.textContent =
+        "The participant has not finished intro, origin, and map steps for this item — no diagram yet.";
+    }
+    return;
+  }
+
+  if (br.originCategoryKey === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) {
+    if (mountEl) mountEl.innerHTML = "";
+    if (placeholderEl) {
+      placeholderEl.classList.remove("is-hidden");
+      placeholderEl.textContent =
+        kind === BRANCH_KIND_PRODUCT
+          ? "This product was skipped — no supply chain diagram."
+          : "This raw material was skipped — no supply chain diagram.";
+    }
+    return;
+  }
+
+  if (rawMaterialSupplyChainBranchNeedsDiagramGate(br)) {
+    if (mountEl) mountEl.innerHTML = "";
+    if (placeholderEl) {
+      placeholderEl.classList.remove("is-hidden");
+      placeholderEl.textContent =
+        "The participant has not confirmed the supply chain in the popup for this item — no diagram here yet.";
+    }
+    return;
+  }
+
+  if (placeholderEl) {
+    placeholderEl.classList.add("is-hidden");
+    placeholderEl.textContent = "";
+  }
+
+  renderSupplyChainDiagramMount(sel, {
+    readOnly: true,
+    mountId: "conductorLeftDiagramMount",
+    branchKind: kind
+  });
+
+  requestAnimationFrame(() => {
+    positionSupplyChainDiagramTrack(document.getElementById("conductorLeftDiagramMount"));
+  });
+}
+
 function openSupplyChainDiagramGate(kind, index) {
   ui.scKind = kind;
   const gate = document.getElementById("rawMaterialSupplyChainDiagramGate");
@@ -4817,6 +5065,32 @@ function initParticipantLeftPanelOnce() {
     ui.participantLeftPanelKind = BRANCH_KIND_PRODUCT;
     ui.participantLeftPanelIndex = i;
     syncParticipantLeftPanel();
+  });
+}
+
+function initConductorLeftPanelOnce() {
+  if (SURVEY_MODE !== "conductor" || document.body.dataset.conductorLeftPanelBound === "1") return;
+  const pills = document.getElementById("conductorRawMaterialPills");
+  const productPills = document.getElementById("conductorProductPills");
+  if (!pills && !productPills) return;
+  document.body.dataset.conductorLeftPanelBound = "1";
+  pills?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-conductor-rm-index]");
+    if (!btn) return;
+    const i = Number(btn.getAttribute("data-conductor-rm-index"));
+    if (Number.isNaN(i)) return;
+    ui.participantLeftPanelKind = BRANCH_KIND_RAW;
+    ui.participantLeftPanelIndex = i;
+    syncConductorParticipantLeftPanel();
+  });
+  productPills?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-conductor-product-index]");
+    if (!btn) return;
+    const i = Number(btn.getAttribute("data-conductor-product-index"));
+    if (Number.isNaN(i)) return;
+    ui.participantLeftPanelKind = BRANCH_KIND_PRODUCT;
+    ui.participantLeftPanelIndex = i;
+    syncConductorParticipantLeftPanel();
   });
 }
 
@@ -5457,9 +5731,11 @@ async function initConductorSurveyUi() {
   const hint = document.getElementById("mapHint");
   if (hint) {
     hint.textContent =
-      "Open “Show participant filter” to search and select a participant, then use tabs 1–3 to review their map (read-only).";
+      "Use the left panel to review the participant’s profile, raw materials, products, and supply-chain diagram (read-only). Open “Show participant filter” to select someone. The map shows all layers including IBX rail context.";
   }
   setupConductorCreateLink();
+  initConductorLeftPanelOnce();
+  syncConductorParticipantLeftPanel();
   // Map was created after #app became visible; still refresh tile/layout after flex settles.
   if (map) {
     requestAnimationFrame(() => {
