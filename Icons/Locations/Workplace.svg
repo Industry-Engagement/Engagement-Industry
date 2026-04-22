@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="f" data-name="4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <defs>
+    <style>
+      .h {
+        fill-rule: evenodd;
+      }
+
+      .h, .i {
+        fill: none;
+        stroke: #000;
+        stroke-miterlimit: 10;
+        stroke-width: 5px;
+      }
+    </style>
+  </defs>
+  <path class="h" d="M147.46,55.2h-32.9v-14.32c0-.71-.65-1.42-1.31-1.42h-46.51c-.65,0-1.42.71-1.42,1.42v14.32h-32.79c-2.07,0-3.38,2.07-3.38,3.43v73.69c0,2.07,1.31,3.43,3.38,3.43h6.1v4.79h8.93v-4.79h84.09v4.79h8.93v-4.79h6.87c1.96,0,3.38-1.36,3.38-3.43V58.63c0-1.36-1.42-3.43-3.38-3.43h0ZM109.77,55.2h-39.65v-10.95s0-.65.65-.65h38.34c.65,0,.65.65.65.65v10.95Z"/>
+  <line class="i" x1="29.21" y1="94.72" x2="150.76" y2="94.72"/>
+  <rect class="i" x="73.96" y="85.68" width="30.49" height="17.93"/>
+</svg>

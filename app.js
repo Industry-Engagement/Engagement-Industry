@@ -48,6 +48,7 @@ const LOCATION_TYPES = {
 };
 
 const LOCATION_TYPE_ICONS = {
+  workplace: "Icons/Locations/Workplace.svg",
   import: "Icons/Locations/Port.svg",
   export: "Icons/Locations/Airport.svg",
   manufacturing: "Icons/Locations/Manufactoring.svg",
@@ -60,7 +61,8 @@ const ORIGIN_TYPE_ICONS = {
   distribution_center: "Icons/Locations/Distribution.svg",
   manufacturing_facility: "Icons/Locations/Manufactoring.svg",
   airport: "Icons/Locations/Airport.svg",
-  port: "Icons/Locations/Port.svg"
+  port: "Icons/Locations/Port.svg",
+  client: "Icons/General/Client.svg"
 };
 
 /** Participant industry questionnaire: multi-select goods / products (keys match checkbox values in sub.html). */
@@ -151,6 +153,7 @@ const SUPPLY_CHAIN_LOCATION_OPTIONS = [
   { key: "manufacturing_facility", label: "Manufacturing Facility" },
   { key: "airport", label: "Airport" },
   { key: "port", label: "Port" },
+  { key: "client", label: "Client" },
   { key: "other", label: "Others" }
 ];
 const SUPPLY_CHAIN_LOCATION_KEYS = new Set(SUPPLY_CHAIN_LOCATION_OPTIONS.map((o) => o.key));
@@ -175,6 +178,15 @@ const SUPPLY_CHAIN_TRANSPORT_MODE_OPTIONS = [
   { key: "other", label: "Others" }
 ];
 const SUPPLY_CHAIN_TRANSPORT_MODE_KEYS = new Set(SUPPLY_CHAIN_TRANSPORT_MODE_OPTIONS.map((o) => o.key));
+const TRANSPORT_MODE_ICONS = {
+  train: "Icons/Modes/Rail.svg",
+  huge_truck: "Icons/Modes/Large-Truck.svg",
+  small_truck: "Icons/Modes/Small_truck.svg"
+};
+const ANIMATION_MODE_ICONS = {
+  ...TRANSPORT_MODE_ICONS,
+  train: "Icons/Modes/Train_front.svg"
+};
 /** Participant skipped the whole origin branch (category + map) for this material. */
 const RAW_MATERIAL_ORIGIN_SKIPPED_KEY = "skipped";
 
@@ -397,7 +409,7 @@ function normalizeSupplyLocationKeyForDiagram(k) {
 
 function normalizeModalChangeKey(k) {
   const s = String(k ?? "").trim();
-  return SUPPLY_CHAIN_MODAL_CHANGE_KEYS.has(s) ? s : "";
+  return SUPPLY_CHAIN_LOCATION_KEYS.has(s) ? s : "";
 }
 
 function normalizeTransportModeKey(k) {
@@ -486,47 +498,7 @@ function allowedModalChangeKeysForIncomingMode(incomingModeKey) {
  * - Transportation(i+2) is forced based on selected B(i) modal-change (when not "other").
  */
 function applySupplyChainDiagramConstraints(dIn) {
-  const d0 = normalizeSupplyChainDiagram(dIn);
-  const nodes = d0.modalChangeNodes.map((n) => ({ ...n }));
-  const legs = d0.transportLegs.map((t) => ({ ...t }));
-
-  // Constrain modal change choices based on incoming leg mode.
-  for (let i = 0; i < nodes.length; i++) {
-    const incoming = legs[i]?.modeKey ?? "";
-    const allowed = allowedModalChangeKeysForIncomingMode(incoming);
-    const mk = normalizeModalChangeKey(nodes[i]?.modalChangeKey);
-    if (allowed && mk && mk !== "other" && !allowed.has(mk)) {
-      nodes[i].modalChangeKey = "";
-      nodes[i].otherDetail = "";
-    }
-  }
-
-  // Force outgoing leg mode based on modal change selection.
-  for (let i = 0; i < nodes.length; i++) {
-    const mk = normalizeModalChangeKey(nodes[i]?.modalChangeKey);
-    if (!mk || mk === "other") continue;
-    const requiredIncoming = modalChangeFromMode(mk);
-    const requiredOutgoing = modalChangeToMode(mk);
-    if (requiredIncoming && legs[i]?.modeKey && legs[i].modeKey !== requiredIncoming) {
-      // If the incoming mode no longer matches, clear the modal-change selection (can't enforce mismatch).
-      nodes[i].modalChangeKey = "";
-      nodes[i].otherDetail = "";
-      continue;
-    }
-    if (requiredOutgoing) {
-      legs[i + 1] = legs[i + 1] ?? { modeKey: "", otherDetail: "" };
-      if (legs[i + 1].modeKey !== requiredOutgoing) {
-        legs[i + 1].modeKey = requiredOutgoing;
-        legs[i + 1].otherDetail = "";
-      }
-    }
-  }
-
-  return normalizeSupplyChainDiagram({
-    ...d0,
-    modalChangeNodes: nodes,
-    transportLegs: legs
-  });
+  return normalizeSupplyChainDiagram(dIn);
 }
 
 function isSupplyChainDiagramComplete(d) {
@@ -695,7 +667,7 @@ function markerIconForSupplyChainDestinationCategory(dIn) {
   const d = normalizeSupplyChainDiagram(dIn ?? {});
   const k = normalizeSupplyLocationKeyForDiagram(d.destinationCategoryKey);
   const svg = k && k !== "other" ? ORIGIN_TYPE_ICONS[k] : null;
-  if (svg) return markerIconFromSvg(svg);
+  if (svg) return markerIconFromSvgInverted(svg);
   return markerIconColored("#7c3aed");
 }
 
@@ -779,7 +751,7 @@ function supplyChainRouteConfirmLabel(d, legIndex) {
   const last = legIndex >= (d.transportLegs?.length ?? 0) - 1;
   if (last) return "This is Destination";
   const bLab = nodes.length <= 1 ? "B" : `B${legIndex + 1}`;
-  return `This is Transportation Mode Change ${bLab}`;
+  return `This is Stopping Point ${bLab}`;
 }
 
 /** Start/end node labels (A, B1, …, C) for the map “Currently Editing” banner. */
@@ -849,6 +821,7 @@ function updateParticipantSupplyChainRouteEditingUI() {
     }
     /* While drawing, visibility/position follow the pointer via map mousemove. */
   }
+  updateMapCursor();
 }
 
 function refreshSupplyChainRouteDraftVisuals() {
@@ -1441,6 +1414,7 @@ function resetDraftDrawing() {
   ui.drawing.polyline = null;
   ui.drawing.transferCostGoldPreview = 0;
   ui.drawing.transferAppliedGoldPreview = false;
+  updateMapCursor();
 }
 
 let map;
@@ -1457,6 +1431,15 @@ function markerIconFromSvg(svgSrc) {
   });
 }
 
+function markerIconFromSvgInverted(svgSrc) {
+  return L.divIcon({
+    className: "",
+    html: `<div style="width:32px;height:32px;border-radius:50%;background:#111;border:2px solid #111;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,0.35)"><img src="${svgSrc}" style="width:27px;height:27px;filter:invert(1)" alt=""></div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16]
+  });
+}
+
 function markerIconColored(color) {
   return L.divIcon({
     className: "",
@@ -1464,6 +1447,17 @@ function markerIconColored(color) {
     iconSize: [14, 14],
     iconAnchor: [7, 7]
   });
+}
+
+function updateMapCursor() {
+  const container = map?.getContainer();
+  if (!container) return;
+  const active =
+    ui.scRouteDrawing ||
+    ui.drawing.active ||
+    ui.scBranchMap !== null ||
+    ui.locationType !== "none";
+  container.style.cursor = active ? "crosshair" : "";
 }
 
 function markerIcon(locationType, fallbackColor) {
@@ -1477,8 +1471,8 @@ function buildPendingLocationConfirmIconHtml(dotColor, svgSrc) {
     : `<div class="locationPendingConfirm__dot" style="background:${dotColor}"></div>`;
   return `<div class="locationPendingConfirm">
   <div class="locationPendingConfirm__row">
-    <button type="button" class="locationPendingConfirm__btn" data-pending-loc="confirm" aria-label="Confirm location">√</button>
-    <button type="button" class="locationPendingConfirm__btn locationPendingConfirm__btn--cancel" data-pending-loc="cancel" aria-label="Choose again">×</button>
+    <button type="button" class="locationPendingConfirm__btn" data-pending-loc="confirm" aria-label="Confirm location">✓</button>
+    <button type="button" class="locationPendingConfirm__btn locationPendingConfirm__btn--cancel" data-pending-loc="cancel" aria-label="Choose again">✕</button>
   </div>
   ${dot}
 </div>`;
@@ -1510,8 +1504,8 @@ function renderPendingLocationMarker() {
   const icon = L.divIcon({
     className: "locationPendingConfirm-marker",
     html: buildPendingLocationConfirmIconHtml(dotColor, pendingSvg),
-    iconSize: [52, 44],
-    iconAnchor: [26, 44]
+    iconSize: [75, 57],
+    iconAnchor: [38, 57]
   });
   const marker = L.marker(latlng, { icon, zIndexOffset: 800 });
   marker.once("add", function onPendingAdd() {
@@ -1664,7 +1658,7 @@ function addSupplyChainBranchOriginMarkersToLocationsLayer(branches, itemLabels,
     }
     const originSvg = ORIGIN_TYPE_ICONS[b.originCategoryKey];
     const mk = L.marker(latlng, {
-      icon: originSvg ? markerIconFromSvg(originSvg) : markerIconColored("#14b8a6"),
+      icon: originSvg ? markerIconFromSvgInverted(originSvg) : markerIconColored("#14b8a6"),
       draggable: false
     });
     mk.bindPopup(
@@ -1703,6 +1697,42 @@ function addSupplyChainBranchRoutePolylinesToLayer(branches, itemLabels, kind) {
   }
 }
 
+/** Stopping points (diagram B nodes): icon from location type; position from last point of each intermediate leg. */
+function addSupplyChainBranchStoppingPointMarkersToLayer(branches, itemLabels, kind) {
+  if (!layers?.supplyChainDestinations) return;
+  const isProduct = kind === BRANCH_KIND_PRODUCT;
+  const fallback = isProduct ? "Product" : "Material";
+  const arr = Array.isArray(branches) ? branches : [];
+  const labels = Array.isArray(itemLabels) ? itemLabels : [];
+  for (let bi = 0; bi < arr.length; bi++) {
+    const b = arr[bi];
+    if (!b || b.originCategoryKey === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) continue;
+    const d = normalizeSupplyChainDiagram(b.supplyChainDiagram ?? defaultSupplyChainDiagram());
+    const routes = normalizeSupplyChainTransportRoutesForBranch(b.supplyChainTransportRoutes, b.supplyChainDiagram);
+    const itemLabel = String(labels[bi] ?? "").trim() || `${fallback} ${bi + 1}`;
+    for (let ni = 0; ni < d.modalChangeNodes.length; ni++) {
+      const pts = routes[ni]?.points;
+      if (!Array.isArray(pts) || pts.length < 1) continue;
+      const last = pts[pts.length - 1];
+      const latlng = epsg2263XYToLatLng(last[0], last[1]);
+      const node = d.modalChangeNodes[ni];
+      const locKey = normalizeModalChangeKey(node?.modalChangeKey);
+      const iconSrc = (locKey && locKey !== "other")
+        ? (ORIGIN_TYPE_ICONS[locKey] ?? ORIGIN_TYPE_ICONS.storage_facility)
+        : ORIGIN_TYPE_ICONS.storage_facility;
+      const icon = markerIconFromSvg(iconSrc);
+      const bLabel = d.modalChangeNodes.length <= 1 ? "B" : `B${ni + 1}`;
+      const locOpt = SUPPLY_CHAIN_LOCATION_OPTIONS.find((o) => o.key === locKey);
+      const locDesc = locKey === "other"
+        ? (String(node?.otherDetail ?? "").trim() || "Others")
+        : (locOpt?.label ?? locKey ?? "Stopping Point");
+      const mk = L.marker(latlng, { icon, draggable: false });
+      mk.bindPopup(`Stopping Point ${bLabel}<br/>${escapeHtml(itemLabel)}<br/>${escapeHtml(locDesc)}`);
+      layers.supplyChainDestinations.addLayer(mk);
+    }
+  }
+}
+
 /** Destination (diagram node C): icon from destination category; position from last point of last drawn leg. */
 function addSupplyChainBranchDestinationMarkersToLayer(branches, itemLabels, kind) {
   if (!layers?.supplyChainDestinations) return;
@@ -1725,6 +1755,152 @@ function addSupplyChainBranchDestinationMarkersToLayer(branches, itemLabels, kin
       `${roleLine}<br/>${escapeHtml(itemLabel)}<br/>Destination type: ${escapeHtml(destDesc)}`
     );
     layers.supplyChainDestinations.addLayer(mk);
+  }
+}
+
+// --- Route icon animation ---
+let routeAnimationHandles = [];
+
+function stopRouteAnimations() {
+  routeAnimationHandles.forEach((fn) => fn());
+  routeAnimationHandles = [];
+}
+
+function startRouteAnimationForLeg(latlngs, modeKey) {
+  const normalizedMode = normalizeTransportModeKey(modeKey);
+  const frontSrc = ANIMATION_MODE_ICONS[normalizedMode];
+  if (!frontSrc || latlngs.length < 2) return null;
+
+  const ICON_SIZE = 56;
+  const PIXELS_PER_SEC = 60;
+  const isTrain = normalizedMode === "train";
+  const CAR_COUNT = 3;
+  const CAR_SPACING = ICON_SIZE * 0.5;
+
+  function makeMarker(src, zOffset) {
+    const icon = L.divIcon({
+      className: "",
+      html: `<img class="routeAnimIcon" src="${escapeHtml(src)}" alt="" aria-hidden="true">`,
+      iconSize: [ICON_SIZE, ICON_SIZE],
+      iconAnchor: [ICON_SIZE / 2, ICON_SIZE / 2]
+    });
+    const m = L.marker(latlngs[0], { icon, interactive: false, zIndexOffset: zOffset });
+    m.addTo(layers.routeAnimations);
+    return m;
+  }
+
+  // Add cars first (lower z) so the front renders on top
+  const carMarkers = isTrain
+    ? Array.from({ length: CAR_COUNT }, (_, i) => makeMarker("Icons/Modes/Train_car.svg", 100 - i * 10))
+    : [];
+  const frontMarker = makeMarker(frontSrc, 200);
+
+  let pixelsElapsed = 0;
+  let lastTime = null;
+  let rafId;
+
+  function buildPixelRoute() {
+    const pixelPts = latlngs.map((ll) => map.latLngToContainerPoint(ll));
+    let totalPixels = 0;
+    const segLens = [];
+    for (let i = 0; i < pixelPts.length - 1; i++) {
+      const dx = pixelPts[i + 1].x - pixelPts[i].x;
+      const dy = pixelPts[i + 1].y - pixelPts[i].y;
+      segLens.push(Math.sqrt(dx * dx + dy * dy));
+      totalPixels += segLens[segLens.length - 1];
+    }
+    return { pixelPts, segLens, totalPixels };
+  }
+
+  function positionAt(pixelPts, segLens, px) {
+    let remaining = Math.max(0, px);
+    let pixPos = pixelPts[pixelPts.length - 1];
+    let dirX = 0, dirY = 1;
+    for (let i = 0; i < segLens.length; i++) {
+      if (remaining <= segLens[i] || i === segLens.length - 1) {
+        const t = segLens[i] > 0 ? remaining / segLens[i] : 0;
+        pixPos = L.point(
+          pixelPts[i].x + t * (pixelPts[i + 1].x - pixelPts[i].x),
+          pixelPts[i].y + t * (pixelPts[i + 1].y - pixelPts[i].y)
+        );
+        dirX = pixelPts[i + 1].x - pixelPts[i].x;
+        dirY = pixelPts[i + 1].y - pixelPts[i].y;
+        break;
+      }
+      remaining -= segLens[i];
+    }
+    return { pixPos, dirX, dirY };
+  }
+
+  function applyToMarker(marker, pixelPts, segLens, px) {
+    const { pixPos, dirX, dirY } = positionAt(pixelPts, segLens, px);
+    marker.setLatLng(map.containerPointToLatLng(pixPos));
+    const bearing = (Math.atan2(dirX, -dirY) * 180) / Math.PI;
+    const el = marker.getElement();
+    if (el) {
+      const img = el.querySelector(".routeAnimIcon");
+      if (img) img.style.transform = `rotate(${bearing - 90}deg)`;
+    }
+  }
+
+  function step(ts) {
+    if (lastTime === null) lastTime = ts;
+    const dt = ts - lastTime;
+    lastTime = ts;
+
+    const { pixelPts, segLens, totalPixels } = buildPixelRoute();
+    if (totalPixels < 1) { rafId = requestAnimationFrame(step); return; }
+
+    pixelsElapsed = (pixelsElapsed + (PIXELS_PER_SEC * dt) / 1000) % totalPixels;
+
+    applyToMarker(frontMarker, pixelPts, segLens, pixelsElapsed);
+
+    for (let ci = 0; ci < carMarkers.length; ci++) {
+      const carPx = pixelsElapsed - (ci + 1) * CAR_SPACING;
+      const el = carMarkers[ci].getElement();
+      if (carPx < 0) {
+        if (el) el.style.visibility = "hidden";
+      } else {
+        if (el) el.style.visibility = "visible";
+        applyToMarker(carMarkers[ci], pixelPts, segLens, carPx);
+      }
+    }
+
+    rafId = requestAnimationFrame(step);
+  }
+
+  rafId = requestAnimationFrame(step);
+  return () => {
+    cancelAnimationFrame(rafId);
+    if (layers?.routeAnimations) {
+      layers.routeAnimations.removeLayer(frontMarker);
+      carMarkers.forEach((m) => layers.routeAnimations.removeLayer(m));
+    }
+  };
+}
+
+function rebuildRouteAnimations() {
+  stopRouteAnimations();
+  if (!map || !layers?.routeAnimations) return;
+  layers.routeAnimations.clearLayers();
+
+  for (const kind of [BRANCH_KIND_RAW, BRANCH_KIND_PRODUCT]) {
+    const { branchesKey } = industryBranchArrays(kind);
+    const branches = state.industry[branchesKey] ?? [];
+    for (const br of branches) {
+      if (!br || br.originCategoryKey === RAW_MATERIAL_ORIGIN_SKIPPED_KEY) continue;
+      const d = normalizeSupplyChainDiagram(br.supplyChainDiagram ?? defaultSupplyChainDiagram());
+      const routes = normalizeSupplyChainTransportRoutesForBranch(br.supplyChainTransportRoutes, d);
+      for (let li = 0; li < routes.length; li++) {
+        const pts = routes[li]?.points;
+        if (!Array.isArray(pts) || pts.length < 2) continue;
+        const latlngs = surveyPointsToLatLngs(pts);
+        if (latlngs.length < 2) continue;
+        const modeKey = d.transportLegs[li]?.modeKey ?? "";
+        const cancel = startRouteAnimationForLeg(latlngs, modeKey);
+        if (cancel) routeAnimationHandles.push(cancel);
+      }
+    }
   }
 }
 
@@ -1787,6 +1963,16 @@ function rebuildFromState() {
     BRANCH_KIND_PRODUCT
   );
 
+  addSupplyChainBranchStoppingPointMarkersToLayer(
+    state.industry?.rawMaterialBranches,
+    state.industry?.rawMaterials,
+    BRANCH_KIND_RAW
+  );
+  addSupplyChainBranchStoppingPointMarkersToLayer(
+    state.industry?.productBranches,
+    state.industry?.products,
+    BRANCH_KIND_PRODUCT
+  );
   addSupplyChainBranchDestinationMarkersToLayer(
     state.industry?.rawMaterialBranches,
     state.industry?.rawMaterials,
@@ -1801,6 +1987,8 @@ function rebuildFromState() {
   if (ui.scRouteDrawing && layers.supplyChainDraft) {
     refreshSupplyChainRouteDraftVisuals();
   }
+
+  rebuildRouteAnimations();
 
   syncParticipantLeftPanel();
   syncConductorParticipantLeftPanel();
@@ -2041,7 +2229,7 @@ function syncParticipantRawMaterialOriginBannerVisibility() {
       ? String(items[idx] ?? "").trim() ||
         (bk === BRANCH_KIND_PRODUCT ? "this product" : "this material")
       : "this material";
-  el.textContent = `Please Mark the Originating Location for ${matName}`;
+  el.textContent = `Please Mark the Origin for ${matName}`;
   el.classList.toggle("is-hidden", !visible);
   el.setAttribute("aria-hidden", visible ? "false" : "true");
   if (!visible) {
@@ -2219,6 +2407,7 @@ function startSegment(section) {
   undoBtn.disabled = false;
   cancelBtn.disabled = false;
   document.getElementById("mapHint").textContent = "Drawing... click to add points, then Finish segment.";
+  updateMapCursor();
 }
 
 function cancelSegment() {
@@ -2419,22 +2608,10 @@ function loadIBXGeoJSONToLayer(geojson) {
   const normalized = normalizeIBXGeoJSONForLeaflet(geojson);
   layers.ibxLine.clearLayers();
 
-  const layer = L.geoJSON(normalized, {
-    style: {
-      color: "#ff0000",
-      weight: 10,
-      opacity: 1
-    },
-    pointToLayer: (feature, latlng) => {
-      return L.circleMarker(latlng, {
-        radius: 15,
-        color: "#ff0000",
-        fillColor: "#ff0000",
-        fillOpacity: 1
-      });
-    }
-  });
-  layer.addTo(layers.ibxLine);
+  L.geoJSON(normalized, {
+    style: { color: "#111", weight: 10, opacity: 0.85, dashArray: "2 5", lineCap: "butt" }
+  }).addTo(layers.ibxLine);
+
   state.ibxLine.loaded = true;
 }
 
@@ -2445,10 +2622,10 @@ function loadIBXStationsGeoJSONToLayer(geojson) {
   const layer = L.geoJSON(normalized, {
     pointToLayer: (feature, latlng) => {
       return L.circleMarker(latlng, {
-        radius: 4,
-        color: "#ff8c1a",
-        weight: 2,
-        fillColor: "#ff8c1a",
+        radius: 6,
+        color: "#111",
+        weight: 1,
+        fillColor: "#fff",
         fillOpacity: 1
       });
     }
@@ -2871,6 +3048,7 @@ function setupUI() {
           : `Placement: click the map to add a ${
               LOCATION_TYPES[ui.locationType]?.label ?? ui.locationType
             } point.`;
+      updateMapCursor();
     });
   });
 
@@ -2908,8 +3086,10 @@ function setupMap() {
   if (map) return;
   map = L.map("map", { zoomControl: true }).setView([40.7128, -74.006], 11);
 
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    subdomains: "abcd",
+    maxZoom: 20
   }).addTo(map);
 
   layers = {
@@ -2919,6 +3099,7 @@ function setupMap() {
     supplyChainRoutes: L.layerGroup(),
     supplyChainDestinations: L.layerGroup(),
     supplyChainDraft: L.layerGroup(),
+    routeAnimations: L.layerGroup(),
     ibxLine: L.layerGroup(),
     ibxStations: L.layerGroup(),
     ibxRoutes: L.layerGroup()
@@ -2930,6 +3111,7 @@ function setupMap() {
   layers.supplyChainRoutes.addTo(map);
   layers.supplyChainDestinations.addTo(map);
   layers.supplyChainDraft.addTo(map);
+  layers.routeAnimations.addTo(map);
   layers.ibxRoutes.addTo(map);
   // IBX line/stations: always on map for conductor; standalone toggles via setStep (ibxRoutes step).
 
@@ -3076,7 +3258,7 @@ function setParticipantMapHintAfterIndustryGate() {
       const startPhrase =
         dr.legIndex === 0
           ? "the originating location (first point is set automatically)"
-          : "the previous Transportation Mode Change (first point is set automatically)";
+          : "the previous Stopping Point (first point is set automatically)";
       hintEl.textContent = `“${name}”: draw Transportation ${tn} (${modeLab}) on the map. The route starts from ${startPhrase}. Click to add more points along the route. Click √ next to the end label when it marks the correct stop for this leg.`;
       syncRawMaterialOriginMapSkipVisibility();
       return;
@@ -3128,6 +3310,7 @@ function syncParticipantMapGateOverlay() {
   updateParticipantRawMaterialOriginBanner();
   updateParticipantSupplyChainRouteEditingUI();
   syncRawMaterialOriginMapSkipVisibility();
+  updateMapCursor();
 }
 
 function syncRawMaterialOriginMapSkipVisibility() {
@@ -3930,11 +4113,10 @@ function applyOriginFromLeftDiagramToRow(row, nextDiagram, o) {
   };
 }
 
-function supplyChainModalSelectHtml(selectedKey, allowedKeys = null) {
+function supplyChainStoppingPointSelectHtml(selectedKey) {
   const opts = [`<option value="">Select…</option>`]
     .concat(
-      SUPPLY_CHAIN_MODAL_CHANGE_OPTIONS.map((o) => {
-        if (allowedKeys && !allowedKeys.has(o.key)) return "";
+      SUPPLY_CHAIN_LOCATION_OPTIONS.map((o) => {
         const sel = o.key === selectedKey ? " selected" : "";
         return `<option value="${escapeHtml(o.key)}"${sel}>${escapeHtml(o.label)}</option>`;
       })
@@ -3943,17 +4125,16 @@ function supplyChainModalSelectHtml(selectedKey, allowedKeys = null) {
   return opts;
 }
 
-function supplyChainTransportSelectHtml(selectedKey, allowedKeys = null) {
-  const opts = [`<option value="">Mode…</option>`]
-    .concat(
-      SUPPLY_CHAIN_TRANSPORT_MODE_OPTIONS.map((o) => {
-        if (allowedKeys && !allowedKeys.has(o.key)) return "";
-        const sel = o.key === selectedKey ? " selected" : "";
-        return `<option value="${escapeHtml(o.key)}"${sel}>${escapeHtml(o.label)}</option>`;
-      })
-    )
-    .join("");
-  return opts;
+function supplyChainTransportPickerHtml(selectedKey, disabled = false) {
+  return SUPPLY_CHAIN_TRANSPORT_MODE_OPTIONS.map((o) => {
+    const icon = TRANSPORT_MODE_ICONS[o.key];
+    const sel = o.key === selectedKey ? " is-selected" : "";
+    const dis = disabled ? " disabled" : "";
+    const inner = icon
+      ? `<img src="${escapeHtml(icon)}" alt="" aria-hidden="true"><span>${escapeHtml(o.label)}</span>`
+      : `<span>${escapeHtml(o.label)}</span>`;
+    return `<button type="button" class="scTransportPicker__btn${sel}" data-mode="${escapeHtml(o.key)}"${dis}>${inner}</button>`;
+  }).join("");
 }
 
 function formatOriginLabelForSupplyChainABranch(b) {
@@ -4016,8 +4197,8 @@ function collectSupplyChainDiagramFromMount(
   const legCount = nodes.length + 1;
   const legs = [];
   for (let li = 0; li < legCount; li++) {
-    const sel = mount.querySelector(`[data-sc-transport-leg="${li}"]`);
-    const mode = String(sel?.value ?? "").trim();
+    const picker = mount.querySelector(`[data-sc-transport-leg="${li}"]`);
+    const mode = picker?.querySelector(".scTransportPicker__btn.is-selected")?.dataset.mode ?? "";
     const ot = mount.querySelector(`[data-sc-transport-other="${li}"]`);
     legs.push({
       modeKey: normalizeTransportModeKey(mode),
@@ -4128,11 +4309,11 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
   if (allowLeftOriginEdit) {
     parts.push(`<div class="supplyChainDiagram__fieldLabel supplyChainDiagram__fieldLabel--withIcon">`);
     parts.push(`<img class="supplyChainDiagram__icon" src="${originIcon}" alt="" aria-hidden="true"/>`);
-    parts.push(`<span>Originating Location</span>`);
+    parts.push(`<span>Origin</span>`);
     parts.push(`</div>`);
     const showOriginOther = br.originCategoryKey === "other";
     parts.push(
-      `<select class="goodsGate__input supplyChainDiagram__select" data-sc="origin-category" aria-label="Originating location type">`
+      `<select class="goodsGate__input supplyChainDiagram__select" data-sc="origin-category" aria-label="Origin type">`
     );
     parts.push(rawMaterialOriginSelectHtml(br.originCategoryKey));
     parts.push(`</select>`);
@@ -4150,7 +4331,7 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
       `<p class="supplyChainDiagram__hint">Changing the type clears drawn transportation routes. Use Place on map to set or move the origin pin.</p>`
     );
   } else {
-    parts.push(`<div class="supplyChainDiagram__fieldLabel">Originating Location</div>`);
+    parts.push(`<div class="supplyChainDiagram__fieldLabel">Origin</div>`);
     parts.push(
       `<div class="supplyChainDiagram__readonly"><img class="supplyChainDiagram__icon" src="${originIcon}" alt=""/> <span>${originSummary}</span></div>`
     );
@@ -4168,13 +4349,8 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
   for (let ni = 0; ni <= nodes.length; ni++) {
     const leg = legs[ni] ?? { modeKey: "", otherDetail: "" };
     const legIdx = ni;
-    const requiredMode = legIdx > 0 ? modalChangeToMode(nodes[legIdx - 1]?.modalChangeKey) : null;
-    const legAllowed = requiredMode
-      ? new Set([requiredMode])
-      : null;
     const showTOther = leg.modeKey === "other";
     const tlab = `Transportation ${ni + 1}`;
-    const transportDisabled = readOnly || requiredMode ? " disabled" : "";
     const tInputRo = readOnly ? " readonly" : "";
     parts.push(`<div class="supplyChainDiagram__row supplyChainDiagram__row--transport">`);
     parts.push(`<div class="supplyChainDiagram__trackPad" aria-hidden="true"></div>`);
@@ -4183,7 +4359,7 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
       const canR = canRedrawSupplyChainTransportLeg(br, legIdx);
       const redrawTitle = canR
         ? "Clear this leg and all later legs on the map, then redraw starting here"
-        : "Complete earlier transportation routes on the map first (and originating location for Transportation 1)";
+        : "Complete earlier transportation routes on the map first (and origin for Transportation 1)";
       parts.push(`<div class="supplyChainDiagram__transportLabelBar">`);
       parts.push(`<span class="supplyChainDiagram__fieldLabel supplyChainDiagram__fieldLabel--bar">${escapeHtml(tlab)}</span>`);
       parts.push(
@@ -4195,13 +4371,9 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
     } else {
       parts.push(`<div class="supplyChainDiagram__fieldLabel">${escapeHtml(tlab)}</div>`);
     }
-    parts.push(
-      `<select class="goodsGate__input supplyChainDiagram__select" data-sc-transport-leg="${legIdx}" aria-label="${escapeHtml(
-        tlab
-      )} mode"${transportDisabled}>`
-    );
-    parts.push(supplyChainTransportSelectHtml(leg.modeKey, legAllowed));
-    parts.push(`</select>`);
+    parts.push(`<div class="scTransportPicker" data-sc-transport-leg="${legIdx}">`);
+    parts.push(supplyChainTransportPickerHtml(leg.modeKey, readOnly));
+    parts.push(`</div>`);
     parts.push(
       `<div class="goodsOtherWrap supplyChainDiagram__otherWrap${showTOther ? "" : " is-hidden"}" data-sc-transport-other-wrap="${legIdx}">`
     );
@@ -4211,7 +4383,7 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
     parts.push(`</div>`);
     if (!readOnly) {
       parts.push(
-        `<div class="supplyChainDiagram__inlineActions"><button type="button" class="supplyChainDiagram__iconBtn" data-sc-add-after-leg="${legIdx}" title="Add transportation mode change">+</button></div>`
+        `<div class="supplyChainDiagram__inlineActions"><button type="button" class="supplyChainDiagram__iconBtn" data-sc-add-after-leg="${legIdx}" title="Add stopping point">+</button></div>`
       );
     }
     parts.push(`</div></div>`);
@@ -4220,18 +4392,22 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
       const node = nodes[ni] ?? { modalChangeKey: "", otherDetail: "" };
       const showMOther = node.modalChangeKey === "other";
       const bLabel = nodes.length <= 1 ? "B" : `B${ni + 1}`;
-      const incomingMode = legs[ni]?.modeKey ?? "";
-      const allowedModal = allowedModalChangeKeysForIncomingMode(incomingMode);
       const modalDisabled = readOnly ? " disabled" : "";
       const mInputRo = readOnly ? " readonly" : "";
       parts.push(`<div class="supplyChainDiagram__row supplyChainDiagram__row--b">`);
       parts.push(`<div class="supplyChainDiagram__nodeDot supplyChainDiagram__nodeDot--b" aria-hidden="true">${escapeHtml(bLabel)}</div>`);
       parts.push(`<div class="supplyChainDiagram__fields">`);
-      parts.push(`<div class="supplyChainDiagram__fieldLabel">Transportation Mode Change</div>`);
+      const stoppingIconSrc = (node.modalChangeKey && node.modalChangeKey !== "other")
+        ? (ORIGIN_TYPE_ICONS[node.modalChangeKey] ?? ORIGIN_TYPE_ICONS.storage_facility)
+        : ORIGIN_TYPE_ICONS.storage_facility;
+      parts.push(`<div class="supplyChainDiagram__fieldLabel supplyChainDiagram__fieldLabel--withIcon">`);
+      parts.push(`<img class="supplyChainDiagram__icon" src="${escapeHtml(stoppingIconSrc)}" alt="" aria-hidden="true"/>`);
+      parts.push(`<span>Stopping Point</span>`);
+      parts.push(`</div>`);
       parts.push(
-        `<select class="goodsGate__input supplyChainDiagram__select" data-sc-modal-node="${ni}" aria-label="Mode change ${ni + 1}"${modalDisabled}>`
+        `<select class="goodsGate__input supplyChainDiagram__select" data-sc-modal-node="${ni}" aria-label="Stopping point ${ni + 1}"${modalDisabled}>`
       );
-      parts.push(supplyChainModalSelectHtml(node.modalChangeKey, allowedModal));
+      parts.push(supplyChainStoppingPointSelectHtml(node.modalChangeKey));
       parts.push(`</select>`);
       parts.push(
         `<div class="goodsOtherWrap supplyChainDiagram__otherWrap${showMOther ? "" : " is-hidden"}" data-sc-modal-other-wrap="${ni}">`
@@ -4370,8 +4546,15 @@ function renderSupplyChainDiagramMount(materialIndex, options = {}) {
         : applySupplyChainDiagramConstraints(defaultSupplyChainDiagram());
     }
 
-    mount.querySelectorAll("[data-sc-transport-leg]").forEach((sel) => {
-      sel.addEventListener("change", () => {
+    mount.querySelectorAll(".scTransportPicker__btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const picker = btn.closest("[data-sc-transport-leg]");
+        if (!picker) return;
+        picker.querySelectorAll(".scTransportPicker__btn").forEach((b) => b.classList.remove("is-selected"));
+        btn.classList.add("is-selected");
+        const legIdx = Number(picker.getAttribute("data-sc-transport-leg"));
+        const otherWrap = mount.querySelector(`[data-sc-transport-other-wrap="${legIdx}"]`);
+        if (otherWrap) otherWrap.classList.toggle("is-hidden", btn.dataset.mode !== "other");
         const next = snapshotDiagramFromDomOrState();
         applyDiagram(next);
       });
